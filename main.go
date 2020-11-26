@@ -50,7 +50,14 @@ func main() {
 
 // Create a function that will handle the routes
 func jsonEncoder(w http.ResponseWriter, r *http.Request) {
+	p1 := person{
+		First: "Jenny",
+	}
 
+	err := json.NewEncoder(w).Encode(p1)
+	if err != nil {
+		log.Println("Cannot encode bad data: ", err)
+	}
 }
 
 func jsonDecoder(w http.ResponseWriter, r *http.Request) {
