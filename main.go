@@ -15,13 +15,13 @@ func main() {
 	// handle routes
 	http.HandleFunc("/encode", enJSON)
 
-	http.HandleFunc("/decode", deJSON)
+	http.HandleFunc("/decode", decJSON)
 	// Create server
 	http.ListenAndServe(":8080", nil)
 
 }
 
-func deJSON(w http.ResponseWriter, req *http.Request) {
+func decJSON(w http.ResponseWriter, req *http.Request) {
 	xp2 := []person{}
 	err := json.NewDecoder(req.Body).Decode(&xp2)
 	if err != nil {
