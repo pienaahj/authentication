@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 )
 
 type person struct {
@@ -35,4 +36,23 @@ func main() {
 	}
 
 	fmt.Println("back into a Go data structure", xp2)
+
+	// ########################################################################
+
+	// Handle the routes
+	http.HandleFunc("/encode", jsonEncoder)
+	http.HandleFunc("/decode", jsonDecoder)
+
+	// Create a server
+	http.ListenAndServe(":8080", nil)
+
+}
+
+// Create a function that will handle the routes
+func jsonEncoder(w http.ResponseWriter, r *http.Request) {
+
+}
+
+func jsonDecoder(w http.ResponseWriter, r *http.Request) {
+
 }
