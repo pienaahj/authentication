@@ -61,5 +61,11 @@ func jsonEncoder(w http.ResponseWriter, r *http.Request) {
 }
 
 func jsonDecoder(w http.ResponseWriter, r *http.Request) {
+	var p1 person
+	err := json.NewDecoder(r.Body).Decode(&p1)
+	if err != nil {
+		log.Println("Could not Decode bad Data: ", err)
+	}
 
+	log.Println("Person: ", p1)
 }
