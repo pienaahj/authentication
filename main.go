@@ -5,12 +5,32 @@ import (
 	"crypto/sha512"
 	"fmt"
 	"log"
+	"time"
 
+	"github.com/dgrijalva/jwt-go"
 	"golang.org/x/crypto/bcrypt"
 )
 
+// jwt requires a signing method and claims type - MapClaims or StandardClaims
+
+// UserClaims creates customs claims object
+type UserClaims struct {
+	jwt.StandardClaims //most simple Claims
+	SessionID          int64
+}
+
 var key = []byte{}
 
+// Claims overrites the standard Claims method
+func (u *UserClaims) Claims() error {
+	if !u.VerifyExpiresAt(time.Now().Unix(), true) {
+		return fmt.Errorf("Token expired")
+	}
+	if u.SessionID == 0 {
+		return fmt.Errorf("Invalid session")
+	}
+	return nil
+}
 func main() {
 	// Generate the key(needs to be 64 bytes for sha512) insecure generate this by another means example only
 	for i := 1; i <= 64; i++ {
@@ -47,7 +67,8 @@ func comparePassword(password string, hashedPass []byte) error {
 	return nil
 }
 
-//HMAC - Hash Message Authentication Code - signing algorithm.
+//HMAC - Hash Message Authentication Code - signing algorithm uses a key to sign a message.
+// purpose to see if a message has changed
 func signMessage(msg []byte) ([]byte, error) {
 	h := hmac.New(sha512.New, key)
 	_, err := h.Write(msg)
