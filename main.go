@@ -14,13 +14,7 @@ import (
 
 func main() {
 	msg := "This is totally awsome learning base64 encoding from the ground up!"
-	// encodedMsg := encode(msg)
-	// fmt.Println("Encoded message: ", encodedMsg)
-	// decodedMsg, err := decode(encodedMsg)
-	// if err != nil {
-	// 	fmt.Println(err)
-	// }
-	// fmt.Println("Decoded message: ", decodedMsg)
+
 	password := "ilovedogs"
 	bcryptPass, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
 	if err != nil {
