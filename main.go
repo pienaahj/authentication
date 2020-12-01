@@ -1,43 +1,83 @@
 package main
 
 import (
+	"crypto/hmac"
 	"crypto/sha256"
 	"fmt"
 	"io"
-	"log"
-	"os"
+	"net/http"
 )
 
 func main() {
-	//open the file
-	filename := "sample_file.txt"
-	f, err := os.Open(filename)
-	if err != nil {
-		log.Fatalln(err)
-	}
-	defer f.Close()
+	http.HandleFunc("/", foo)
+	http.HandleFunc("/submit", submit)
+	http.ListenAndServe(":8080", nil)
+}
+func getCode(data string) string {
+	//create the hmac hash
+	h := hmac.New(sha256.New, []byte("ourkey"))
+	//write the data passed in to the hash
+	io.WriteString(h, data)
+	//convert the hash to a string and return it
+	return fmt.Sprintf("%x", h.Sum(nil))
+}
 
-	//create the hash
-	h := sha256.New()
-	//write the file content to the hash
-	_, err = io.Copy(h, f)
-	if err != nil {
-		log.Fatalln("Could not copy hash ", err)
+//handle the root route
+func foo(w http.ResponseWriter, req *http.Request) {
+	//` + cookie.Value + `
+	html := `<!DOCTYPE html>
+	<html>
+		<head>
+			<meta charset="utf-8">
+			<meta http-equiv="X-UA-Compatible" content="IE=edge">
+			<title>HMAC Example</title>
+			<meta name="description" content="">
+			<meta name="viewport" content="width=device-width, initial-scale=1">
+			<link rel="stylesheet" href="">
+		</head>
+		<body>
+			<form method="POST" action="/submit">
+				<input type="email" name="email">
+				<input type="password" name="password">
+				<input type="submit">
+			</form>
+		</body>
+	</html>	
+	`
+	io.WriteString(w, html)
+}
+
+//handle the submit route
+func submit(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		http.Redirect(w, req, "/", http.StatusSeeOther)
+		return
 	}
-	fmt.Println()
-	//Digest type(*sha256.digest):
-	// A message digest is a fixed size numeric representation of the contents of a message,
-	//computed by a hash function. A message digest can be encrypted, forming a digital signature.
-	//Messages are inherently variable in size. ...
-	// It must be computationally infeasible to find two messages that hash to the same digest.
-	fmt.Printf("Here is the type of the hash before sum: %T\n", h)
-	fmt.Println()
-	fmt.Printf("SHA256 hash created: %v\n ", h)
-	fmt.Println()
-	bs := h.Sum(nil)
-	//print the hash
-	fmt.Printf("Here is the type of the hash bafter sum: %T\n", bs)
-	fmt.Println()
-	fmt.Printf("SHA256 hash created: %x\n ", bs)
-	fmt.Println()
+	email := req.FormValue("email")
+	if email == "" {
+		http.Redirect(w, req, "/", http.StatusSeeOther)
+		return
+	}
+	password := req.FormValue("password")
+	if password == "" {
+		http.Redirect(w, req, "/", http.StatusSeeOther)
+		return
+	}
+	// set cookie
+	cookie, err := req.Cookie("session-id")
+	// cookie not set
+	if err != nil {
+		//id, _ := uuid.NewV4()
+		cookie = &http.Cookie{
+			Name: "session-id",
+		}
+	}
+	if req.FormValue("email") != "" {
+		cookie.Value = req.FormValue("email")
+	}
+	code := getCode(cookie.Value)
+	//sign the cookie
+	cookie.Value = code + "|" + cookie.Value
+	http.SetCookie(w, cookie)
+
 }
