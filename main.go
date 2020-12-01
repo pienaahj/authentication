@@ -15,7 +15,7 @@ func main() {
 }
 func getCode(data string) string {
 	//create the hmac hash
-	h := hmac.New(sha256.New, []byte("ourkey"))
+	h := hmac.New(sha256.New, []byte("ourkey 1234"))
 	//write the data passed in to the hash
 	io.WriteString(h, data)
 	//convert the hash to a string and return it
@@ -24,7 +24,13 @@ func getCode(data string) string {
 
 //handle the root route
 func foo(w http.ResponseWriter, req *http.Request) {
-	//` + cookie.Value + `
+	//get cookie back
+	cookie, err := req.Cookie("seesio-id")
+	if err != nil {
+		cookie = &http.Cookie{}
+	}
+
+	//
 	html := `<!DOCTYPE html>
 	<html>
 		<head>
@@ -36,6 +42,7 @@ func foo(w http.ResponseWriter, req *http.Request) {
 			<link rel="stylesheet" href="">
 		</head>
 		<body>
+			<p>Cookie Value: ` + cookie.Value + `</p>
 			<form method="POST" action="/submit">
 				<input type="email" name="email">
 				<input type="password" name="password">
@@ -79,5 +86,6 @@ func submit(w http.ResponseWriter, req *http.Request) {
 	//sign the cookie
 	cookie.Value = code + "|" + cookie.Value
 	http.SetCookie(w, cookie)
+	http.Redirect(w, req, "/", http.StatusSeeOther)
 
 }
