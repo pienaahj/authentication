@@ -11,6 +11,15 @@ import (
 	"github.com/dgrijalva/jwt-go"
 )
 
+//MyCustomClaims create type
+type MyCustomClaims struct {
+	Data string `json:"myclaimsfield"`
+	jwt.StandardClaims
+}
+
+//create the key
+const mySigningKey = "ourkey 1234"
+
 func main() {
 	http.HandleFunc("/", createTestCookie)
 	http.HandleFunc("/submit", submit)
@@ -20,7 +29,7 @@ func main() {
 //getCode uses input data - string and returns an HAMC - string
 func getCode(data string) string {
 	//create the hmac hash
-	h := hmac.New(sha256.New, []byte("ourkey 1234"))
+	h := hmac.New(sha256.New, []byte(mySigningKey))
 	//write the data passed in to the hash
 	io.WriteString(h, data)
 	//convert the hash to a string and return it
@@ -29,13 +38,6 @@ func getCode(data string) string {
 
 //getJWT uses input data - string and returns an JWT - string
 func getJWT(data string) (string, error) {
-	//create the key
-	mySigningKey := "ourkey 1234"
-	//create myCustomClaims type
-	type MyCustomClaims struct {
-		Data string `json:"myclaimsfield"`
-		jwt.StandardClaims
-	}
 	claims := MyCustomClaims{
 		data,
 		jwt.StandardClaims{
@@ -53,7 +55,7 @@ func getJWT(data string) (string, error) {
 	return ss, nil
 }
 
-//handle the root route - create the cookie - test if cookie is the same as created - then on logged in
+//handle the root route - create the cookie - test if cookie is the same as created - then logged in
 func createTestCookie(w http.ResponseWriter, req *http.Request) {
 	//get cookie back
 	cookie, err := req.Cookie("session-id")
@@ -63,9 +65,9 @@ func createTestCookie(w http.ResponseWriter, req *http.Request) {
 	//setting message
 	message := "Not logged in!..."
 	isEqual := true
-	//testing cookie
+	// if there is a cookie process it
 	if len(cookie.Value) != 0 {
-		fmt.Println("*******************testing cookie****************************")
+		fmt.Println("*******************evaluating cookie****************************")
 		fmt.Println("Cookie: ", cookie.Value)
 		fmt.Println()
 
@@ -88,31 +90,37 @@ func createTestCookie(w http.ResponseWriter, req *http.Request) {
 		// fmt.Println()
 		// fmt.Println("********************************************************")
 		// http.SetCookie(w, cookie)
+
 		// set logged in flag
 		message = "Not logged in!..."
 		// isEqual = hmac.Equal([]byte(code), []byte(returnCode))
 
-		//create myCustomClaims type
-		type MyCustomClaims struct {
-			Data string `json:"myclaimsfield"`
-			jwt.StandardClaims
-		}
-
 		//get the signed token from cookie
-		// ss := cookie.Value
+		ss := cookie.Value
 
-		//check signature
-		// token, err:= jwt.ParseWithClaims(ss, &MyCustomClaims{}, jwt.Keyfunc (*){})
+		//check signature - this is weird!! you don't need an instance just a type of MyCustomClaims
+		//this first uses the token(in the callback function) and then verifies it in the same step.
+		verifiedToken, err := jwt.ParseWithClaims(ss, &MyCustomClaims{}, func(unverifiedToken *jwt.Token) (interface{}, error) {
+			return []byte(mySigningKey), nil
+		})
 
-		if isEqual {
-			message = "Logged in!..."
-		}
+		// Is the token valid?  It is populated when you Parse/Verify a token - only checks if the claims has not expired
+		isEqual = verifiedToken.Valid && err == nil
+		//need to assert VerifiedToken of *MyCustomeClaims type!! You know what you passed in when created.
+		claims := verifiedToken.Claims.(*MyCustomClaims)
 
-		http.SetCookie(w, cookie)
 		//compare the new hmac to the cookie hmac
+
 		if !isEqual { //code != returnCode
 			cookie = &http.Cookie{} //reset cookie if not the same
 		}
+		//the token is verified:
+		message = "Logged in!...as: " + claims.Data
+		fmt.Printf("Claims: %v\n email: %s\n", claims, claims.Data)
+		// cookie.Value = claims.Data
+		// http.SetCookie(w, cookie)
+		fmt.Println("*******************evaluating cookie****************************")
+		fmt.Println()
 	}
 
 	html := `<!DOCTYPE html>
@@ -176,10 +184,11 @@ func submit(w http.ResponseWriter, req *http.Request) {
 	//sign the cookie
 	cookie.Value = code
 	http.SetCookie(w, cookie)
-	fmt.Println("********************************************************")
+	fmt.Println("*******************signing cookie***********************")
 	fmt.Println(" first Cookie : ", cookie.Value)
 	fmt.Println()
-	fmt.Println("********************************************************")
+	fmt.Println("**********************signing done****************************")
+	fmt.Println()
 	http.Redirect(w, req, "/", http.StatusSeeOther)
 
 }
