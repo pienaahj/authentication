@@ -101,11 +101,16 @@ func createTestCookie(w http.ResponseWriter, req *http.Request) {
 		//check signature - this is weird!! you don't need an instance just a type of MyCustomClaims
 		//this first uses the token(in the callback function) and then verifies it in the same step.
 		verifiedToken, err := jwt.ParseWithClaims(ss, &MyCustomClaims{}, func(unverifiedToken *jwt.Token) (interface{}, error) {
+			//according to jwt advisory you need to check if your signing method remained the same in callback.
+			//the signing method are carried inside the unverified token.
+			if unverifiedToken.Method.Alg() != jwt.SigningMethodHS256.Alg() {
+				return nil, fmt.Errorf("someone tried changing the signing method")
+			}
 			return []byte(mySigningKey), nil
 		})
 
 		// Is the token valid?  It is populated when you Parse/Verify a token - only checks if the claims has not expired
-		isEqual = verifiedToken.Valid && err == nil
+		isEqual = err == nil && verifiedToken.Valid //important to check the error first nill pointer value see running video
 		//need to assert VerifiedToken of *MyCustomeClaims type!! You know what you passed in when created.
 		claims := verifiedToken.Claims.(*MyCustomClaims)
 
