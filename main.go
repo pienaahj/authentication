@@ -4,11 +4,18 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"fmt"
+	"html/template"
+	"log"
+
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
+	"github.com/pienaahj/authentication/conf"
+
 	"github.com/dgrijalva/jwt-go"
+	"golang.org/x/crypto/bcrypt"
 )
 
 //MyCustomClaims create type
@@ -17,13 +24,32 @@ type MyCustomClaims struct {
 	jwt.StandardClaims
 }
 
+// Controller struct for template controller
+type Controller struct {
+	tpl *template.Template
+}
+
 //create the key
 const mySigningKey = "ourkey 1234"
 
+// create map to store emails & passwords
+var localStorage map[string][]byte
+
+// NewController provides new controller for template processing
+func NewController(t *template.Template) *Controller {
+	return &Controller{t}
+}
 func main() {
-	http.HandleFunc("/", createTestCookie)
-	http.HandleFunc("/submit", submit)
-	http.ListenAndServe(":8080", nil)
+
+	// Get a template controller value.
+	c := NewController(conf.TPL)
+	localStorage = map[string][]byte{}
+
+	// http.HandleFunc("/", createTestCookie)
+	// http.HandleFunc("/submit", submit)
+	http.HandleFunc("/", c.register)
+	http.HandleFunc("/process", c.processForm)
+	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
 //getCode uses input data - string and returns an HAMC - string
@@ -54,6 +80,59 @@ func getJWT(data string) (string, error) {
 	}
 	return ss, nil
 }
+
+//handle the register GET route - /
+func (c Controller) register(w http.ResponseWriter, req *http.Request) {
+	// populate the template struct with empty values
+	// retrieve the email if provided before
+	errorMsg := req.FormValue("errormsg")
+	templateData := struct {
+		Email    string
+		ErrorMsg string
+	}{
+		Email:    "email",
+		ErrorMsg: errorMsg,
+	}
+	c.tpl.ExecuteTemplate(w, "landing.gohtml", templateData)
+}
+
+//handle the process POST route - /process
+func (c Controller) processForm(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		errorMsg := url.QueryEscape("Your method was not POST")
+		http.Redirect(w, req, "/?errormsg= "+errorMsg, http.StatusSeeOther)
+		return
+	}
+	email := req.FormValue("email")
+	if email == "" {
+		errorMsg := url.QueryEscape("Your email cannot be empty")
+		http.Redirect(w, req, "/?errormsg= "+errorMsg, http.StatusSeeOther)
+		return
+
+	}
+	password := req.FormValue("password")
+	if password == "" {
+		errorMsg := url.QueryEscape("You have not supplied a valid password ")
+		http.Redirect(w, req, "/?errormsg= "+errorMsg, http.StatusSeeOther)
+		return
+	}
+	//store login credentials in localStorage map
+	// encrypt password
+	passW, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		errorMsg := url.QueryEscape("Internal server error occured.")
+		http.Error(w, errorMsg, http.StatusInternalServerError) //will display on separate page with only the error
+		return
+	}
+	localStorage[email] = passW
+	fmt.Printf("Data provided: %v\n", localStorage)
+	fmt.Println()
+	// errorMsg := url.QueryEscape("Testing the error messaging.")
+	// http.Redirect(w, req, "/?errormsg= "+errorMsg, http.StatusSeeOther)
+}
+
+// **************************************************************************************************
+// **************************************************************************************************
 
 //handle the root route - create the cookie - test if cookie is the same as created - then logged in
 func createTestCookie(w http.ResponseWriter, req *http.Request) {
