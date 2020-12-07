@@ -33,7 +33,11 @@ type Controller struct {
 const mySigningKey = "ourkey 1234"
 
 // create map to store emails & passwords
-var localStorage map[string][]byte
+var (
+	localStorage = map[string][]byte{}
+	email        string
+	errorMsg     string
+)
 
 // NewController provides new controller for template processing
 func NewController(t *template.Template) *Controller {
@@ -43,12 +47,17 @@ func main() {
 
 	// Get a template controller value.
 	c := NewController(conf.TPL)
-	localStorage = map[string][]byte{}
-
 	// http.HandleFunc("/", createTestCookie)
+	//handle the register route
 	// http.HandleFunc("/submit", submit)
+	// handle the root route
 	http.HandleFunc("/", c.register)
+	// handle the register route
 	http.HandleFunc("/process", c.processForm)
+	// handle the login route
+	http.HandleFunc("/login", c.login)
+	//hangle the successful login route
+	http.HandleFunc("/success", c.success)
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
@@ -85,12 +94,12 @@ func getJWT(data string) (string, error) {
 func (c Controller) register(w http.ResponseWriter, req *http.Request) {
 	// populate the template struct with empty values
 	// retrieve the email if provided before
-	errorMsg := req.FormValue("errormsg")
+	errorMsg = req.FormValue("errormsg")
 	templateData := struct {
 		Email    string
 		ErrorMsg string
 	}{
-		Email:    "email",
+		Email:    email,
 		ErrorMsg: errorMsg,
 	}
 	c.tpl.ExecuteTemplate(w, "landing.gohtml", templateData)
@@ -99,20 +108,26 @@ func (c Controller) register(w http.ResponseWriter, req *http.Request) {
 //handle the process POST route - /process
 func (c Controller) processForm(w http.ResponseWriter, req *http.Request) {
 	if req.Method != http.MethodPost {
-		errorMsg := url.QueryEscape("Your method was not POST")
+		errorMsg = url.QueryEscape("Your method was not POST")
 		http.Redirect(w, req, "/?errormsg= "+errorMsg, http.StatusSeeOther)
 		return
 	}
-	email := req.FormValue("email")
+	email = req.FormValue("email")
 	if email == "" {
-		errorMsg := url.QueryEscape("Your email cannot be empty")
+		errorMsg = url.QueryEscape("Your email cannot be empty")
 		http.Redirect(w, req, "/?errormsg= "+errorMsg, http.StatusSeeOther)
 		return
-
 	}
+	//check if email exist
+	if _, ok := localStorage[email]; ok {
+		errorMsg = url.QueryEscape("You have not supplied a valid email/password ")
+		http.Redirect(w, req, "/?errormsg= "+errorMsg, http.StatusSeeOther)
+		return
+	}
+	//note that you need to be as vague as possible with the messages here
 	password := req.FormValue("password")
 	if password == "" {
-		errorMsg := url.QueryEscape("You have not supplied a valid password ")
+		errorMsg := url.QueryEscape("You have not supplied a valid email/password ")
 		http.Redirect(w, req, "/?errormsg= "+errorMsg, http.StatusSeeOther)
 		return
 	}
@@ -120,7 +135,7 @@ func (c Controller) processForm(w http.ResponseWriter, req *http.Request) {
 	// encrypt password
 	passW, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
-		errorMsg := url.QueryEscape("Internal server error occured.")
+		errorMsg = url.QueryEscape("Internal server error occured.")
 		http.Error(w, errorMsg, http.StatusInternalServerError) //will display on separate page with only the error
 		return
 	}
@@ -129,6 +144,66 @@ func (c Controller) processForm(w http.ResponseWriter, req *http.Request) {
 	fmt.Println()
 	// errorMsg := url.QueryEscape("Testing the error messaging.")
 	// http.Redirect(w, req, "/?errormsg= "+errorMsg, http.StatusSeeOther)
+	http.Redirect(w, req, "/", http.StatusSeeOther)
+}
+
+//handle the login POST route - /login
+func (c Controller) login(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		errorMsg := url.QueryEscape("Your method was not POST")
+		http.Redirect(w, req, "/?errormsg= "+errorMsg, http.StatusSeeOther)
+		return
+	}
+	email = req.FormValue("email")
+	if email == "" {
+		errorMsg := url.QueryEscape("Your email cannot be empty")
+		http.Redirect(w, req, "/?errormsg= "+errorMsg, http.StatusSeeOther)
+		return
+
+	}
+	password := req.FormValue("password")
+	if password == "" {
+		errorMsg := url.QueryEscape("You have not supplied a valid email/password ")
+		http.Redirect(w, req, "/?errormsg= "+errorMsg, http.StatusSeeOther)
+		return
+	}
+	//verify login credentials in localStorage map
+	// retrieve password
+	sp, ok := localStorage[email]
+	if !ok { //wrong email
+		errorMsg := url.QueryEscape("You need to register first!!")
+		http.Redirect(w, req, "/?errormsg= "+errorMsg, http.StatusSeeOther)
+		return
+	}
+	// verify password
+	err := bcrypt.CompareHashAndPassword(sp, []byte(password))
+	if err != nil {
+		errorMsg := url.QueryEscape("Wrong password")
+		http.Redirect(w, req, "/?errormsg= "+errorMsg, http.StatusSeeOther)
+		return
+	}
+
+	fmt.Printf("Password verified for: %v\n", localStorage)
+	fmt.Println()
+	//display the login screen
+	http.Redirect(w, req, "/success", http.StatusSeeOther)
+	// errorMsg := url.QueryEscape("Testing the error messaging.")
+	// http.Redirect(w, req, "/?errormsg= "+errorMsg, http.StatusSeeOther)
+}
+
+//handle the successful login  GET route - /success
+func (c Controller) success(w http.ResponseWriter, req *http.Request) {
+	// populate the template struct with empty values
+	// retrieve the email if provided before
+	errorMsg = req.FormValue("errormsg")
+	templateData := struct {
+		Email    string
+		ErrorMsg string
+	}{
+		Email:    email,
+		ErrorMsg: errorMsg,
+	}
+	c.tpl.ExecuteTemplate(w, "success.gohtml", templateData)
 }
 
 // **************************************************************************************************

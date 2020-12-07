@@ -7,12 +7,22 @@
     <title>Ninja level1 exercize</title>
 </head>
 <body>
-    <h1>Register Page</h1>
     <p> {{if .ErrorMsg}} Error Message: {{.ErrorMsg}}{{end}}</p>
-
+    <h1>Register:</h1>
     <form method="POST" action="/process" enctype="multipart/form-data">
-        <input type="email" name="email" placeholder={{.Email}} required>
+        <p>Input email:</p>
+        <input type="email" name="email" placeholder="email" required>
+        <p>Input password:</p>
         <input type="password" name="password" required>
         <button type="submit">Submit!</button>
     </form>
+    <h1>Login:</h1>
+    <form method="POST" action="/login" enctype="multipart/form-data">
+        <p>Input email:</p>
+        <input type="email" name="email" placeholder={{.Email}} required>
+        <p>Input password:</p>
+        <input type="password" name="password" required>
+        <button type="submit">Submit!</button>
+    </form>
+
 </body>    
