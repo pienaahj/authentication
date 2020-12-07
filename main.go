@@ -3,9 +3,11 @@ package main
 import (
 	"crypto/hmac"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"html/template"
 	"log"
+	"strings"
 
 	"io"
 	"net/http"
@@ -37,6 +39,7 @@ var (
 	localStorage = map[string][]byte{}
 	email        string
 	errorMsg     string
+	sessionID    string
 )
 
 // NewController provides new controller for template processing
@@ -69,6 +72,41 @@ func getCode(data string) string {
 	io.WriteString(h, data)
 	//convert the hash to a string and return it
 	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
+//create an HMAC token
+func getHMAC(input string) string {
+	//create the hmac hash
+	h := hmac.New(sha256.New, []byte(mySigningKey))
+	//write the data passed in to the hash
+	io.WriteString(h, input)
+	//convert the hash to a string and return it
+	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
+//create createToken session
+func createToken(sID string) string {
+	//get the HMAC of the sessionID
+	signature := getHMAC(sID)
+	//combine the sessionID and signature
+	return signature + "|" + sID
+}
+
+//parseToken parses the HMAC token
+func parseToken(t string) (string, error) {
+	//split the token into signature and sessionID
+	sX := strings.SplitN(t, "|", 2) //only allows tor 2 indexes, safer
+	if len(sX) != 2 {
+		return "", errors.New("not hacked, nice try")
+	}
+	rSignature := sX[0]
+	sID := sX[1]
+	//verify the token
+	cSignature := createToken(sID)
+	if !hmac.Equal([]byte(rSignature), []byte(cSignature)) {
+		return "", errors.New("not hacked, nice try")
+	}
+	return sID, nil
 }
 
 //getJWT uses input data - string and returns an JWT - string
