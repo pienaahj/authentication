@@ -6,14 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
-	"log"
-	"strings"
-
 	"io"
+	"log"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
+	"github.com/gofrs/uuid"
 	"github.com/pienaahj/authentication/conf"
 
 	"github.com/dgrijalva/jwt-go"
@@ -32,22 +32,46 @@ type Controller struct {
 }
 
 //create the key
-const mySigningKey = "ourkey 1234"
+const (
+	mySigningKey = "ourkey 1234"
+)
 
-// create map to store emails & passwords
 var (
+	sessionID uuid.UUID
+	// create map to store emails & passwords
 	localStorage = map[string][]byte{}
-	email        string
-	errorMsg     string
-	sessionID    string
+	// create map to store sessions of UUID per email
+	session = map[uuid.UUID]string{}
+	email   string //temperary storage for user email
+	msg     string //use as message field
 )
 
 // NewController provides new controller for template processing
 func NewController(t *template.Template) *Controller {
 	return &Controller{t}
 }
-func main() {
 
+// makeCookieName removes the '@' from cookie name and replace it with '_' returns a string
+func makeCookieName(s string) string {
+	return strings.Replace(s, "@", "_", 1)
+}
+
+// getEmail gets the email as string from cookie name aand replace '_' with '@' returns a string
+func getEmail(s string) string {
+	return strings.Replace(s, "_", "@", 1)
+}
+
+// find email in session from uuid
+func findUUID(uid string) uuid.UUID {
+	var tuid uuid.UUID
+	for k, v := range session {
+		if v == uid {
+			tuid = k
+		}
+	}
+	return tuid
+}
+func main() {
 	// Get a template controller value.
 	c := NewController(conf.TPL)
 	// http.HandleFunc("/", createTestCookie)
@@ -61,6 +85,8 @@ func main() {
 	http.HandleFunc("/login", c.login)
 	//hangle the successful login route
 	http.HandleFunc("/success", c.success)
+	http.Handle("/favicon.ico", http.NotFoundHandler())
+	fmt.Println("server running on port :8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
@@ -84,7 +110,7 @@ func getHMAC(input string) string {
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
-//create createToken session
+//createToken creates a HMAC token from sessionID and retruns signature + "|" + sessionID
 func createToken(sID string) string {
 	//get the HMAC of the sessionID
 	signature := getHMAC(sID)
@@ -92,7 +118,7 @@ func createToken(sID string) string {
 	return signature + "|" + sID
 }
 
-//parseToken parses the HMAC token
+//parseToken parses the HMAC token from a token and retruns the sessionID
 func parseToken(t string) (string, error) {
 	//split the token into signature and sessionID
 	sX := strings.SplitN(t, "|", 2) //only allows tor 2 indexes, safer
@@ -103,7 +129,9 @@ func parseToken(t string) (string, error) {
 	sID := sX[1]
 	//verify the token
 	cSignature := createToken(sID)
+	cSignature = strings.Split(cSignature, "|")[0] //split the token out
 	if !hmac.Equal([]byte(rSignature), []byte(cSignature)) {
+		fmt.Printf("hmac's not equal: \nrSignature :%v\n cSignature : %v\n ", rSignature, cSignature)
 		return "", errors.New("not hacked, nice try")
 	}
 	return sID, nil
@@ -128,118 +156,253 @@ func getJWT(data string) (string, error) {
 	return ss, nil
 }
 
-//handle the register GET route - /
+//handle the root page GET route - /
 func (c Controller) register(w http.ResponseWriter, req *http.Request) {
-	// populate the template struct with empty values
-	// retrieve the email if provided before
-	errorMsg = req.FormValue("errormsg")
-	templateData := struct {
-		Email    string
-		ErrorMsg string
-	}{
-		Email:    email,
-		ErrorMsg: errorMsg,
+	fmt.Println("Root page started")
+	//get cookie back
+	fmt.Printf("Email: %v\n", session[sessionID])
+	fmt.Println()
+	//see if there is session
+	if session[sessionID] == "" { //no session
+		//clear the cookie
+		cookie := &http.Cookie{}
+		email = ""
+		msg = req.FormValue("msg")
+		fmt.Println("msg: ", msg)
+		http.SetCookie(w, cookie)
+		fmt.Printf("No session, Cookie cleared: %v\n", cookie)
+		fmt.Println()
+		// populate the template struct with values
+		templateData := struct {
+			Email string
+			Msg   string
+		}{
+			Email: email,
+			Msg:   msg,
+		}
+		c.tpl.ExecuteTemplate(w, "landing.gohtml", templateData)
+	} else {
+		//there is session
+		cookieTitle := makeCookieName(email)   //get a cookie name
+		cookie, err := req.Cookie(cookieTitle) //get the cookie back
+		fmt.Printf("There is session, Cookie: %v\n", cookie)
+		fmt.Println()
+		if err != nil { //no session
+			fmt.Printf("cannot retrieve cookie %v\n", cookie)
+		}
+
+		//check valid session *************************************************
+		fmt.Println("Checkking valid session......")
+		fmt.Println()
+		//retrieve the token
+		oldToken := cookie.Value
+		fmt.Printf("Cookie retrieved as:\n Name: %v\n Value: %v\n", cookie.Name, cookie.Value)
+		fmt.Println()
+		sID, err := parseToken(oldToken)
+		if err != nil { //error parsing token - hacked!
+			msg = url.QueryEscape(err.Error())
+			http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
+			fmt.Printf("Could not parse token: %v", oldToken)
+			fmt.Println()
+			return
+		}
+		fmt.Println("Token verified....")
+		//lookup uuid from sID
+		fmt.Printf("Using %v as sID\n", sID)
+		//look the sID up in session map
+		sUUID := findUUID(sID)
+		//compare the stored uuid to the sID
+		ssID, err := uuid.FromString(sUUID.String())
+		if err != nil { //wrong sID
+			msg = url.QueryEscape(err.Error())
+			http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
+			fmt.Printf("Could not parse UUID")
+			fmt.Println()
+			return
+		}
+		fmt.Println("UUID verified....")
+		//lookup the SessionID in map
+		if _, ok := session[ssID]; !ok {
+			fmt.Println("No valid session in root page, cannot find session map!")
+			msg = "" // no valid session
+			email = ""
+		} else {
+			fmt.Println("Valid session in root page.")
+			msg = ""
+			email = sID
+		}
+		//get email from sID
+		email := getEmail(sID)
+
+		//**********************************************************************
+
+		// populate the template struct with values
+		templateData := struct {
+			Email string
+			Msg   string
+		}{
+			Email: email,
+			Msg:   msg,
+		}
+		c.tpl.ExecuteTemplate(w, "landing.gohtml", templateData)
 	}
-	c.tpl.ExecuteTemplate(w, "landing.gohtml", templateData)
 }
 
-//handle the process POST route - /process
+//handle the process POST route - /process - registered
 func (c Controller) processForm(w http.ResponseWriter, req *http.Request) {
 	if req.Method != http.MethodPost {
-		errorMsg = url.QueryEscape("Your method was not POST")
-		http.Redirect(w, req, "/?errormsg= "+errorMsg, http.StatusSeeOther)
+		msg = url.QueryEscape("Your method was not POST")
+		http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
 		return
 	}
 	email = req.FormValue("email")
 	if email == "" {
-		errorMsg = url.QueryEscape("Your email cannot be empty")
-		http.Redirect(w, req, "/?errormsg= "+errorMsg, http.StatusSeeOther)
+		msg = url.QueryEscape("Your email cannot be empty")
+		http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
 		return
 	}
 	//check if email exist
 	if _, ok := localStorage[email]; ok {
-		errorMsg = url.QueryEscape("You have not supplied a valid email/password ")
-		http.Redirect(w, req, "/?errormsg= "+errorMsg, http.StatusSeeOther)
+		msg = url.QueryEscape("You have not supplied a valid email/password ")
+		http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
 		return
 	}
 	//note that you need to be as vague as possible with the messages here
 	password := req.FormValue("password")
 	if password == "" {
-		errorMsg := url.QueryEscape("You have not supplied a valid email/password ")
-		http.Redirect(w, req, "/?errormsg= "+errorMsg, http.StatusSeeOther)
+		msg := url.QueryEscape("You have not supplied a valid email/password ")
+		http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
 		return
 	}
 	//store login credentials in localStorage map
 	// encrypt password
 	passW, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
-		errorMsg = url.QueryEscape("Internal server error occured.")
-		http.Error(w, errorMsg, http.StatusInternalServerError) //will display on separate page with only the error
+		msg = url.QueryEscape("Internal server error occured.")
+		http.Error(w, msg, http.StatusInternalServerError) //will display on separate page with only the error
 		return
 	}
 	localStorage[email] = passW
-	fmt.Printf("Data provided: %v\n", localStorage)
+	//create a session
+	sessionID, err = uuid.NewV4()
+	if err != nil {
+		msg = url.QueryEscape("Internal server error occured.")
+		http.Error(w, msg, http.StatusInternalServerError) //will display on separate page with only the error
+		return
+	}
+
+	session[sessionID] = makeCookieName(email)
+	//get cookie back
+	cookie, err := req.Cookie(session[sessionID])
+	if err == nil { //cookie exists for this session
+		cookie = &http.Cookie{} //clear the cookie
+	}
+	//create the cookie for session
+	//create the token
+	token := createToken(session[sessionID])
+	// populate cookie
+	cookie = &http.Cookie{
+		Name:  session[sessionID], //email
+		Value: token,              //token
+	}
+	//set the cookie
+	http.SetCookie(w, cookie)
+	// __________________________________________________________________
+	//check if cookie name is valid
+	if cookie.Name == "" {
+		fmt.Println("Invalid cookie name")
+	}
+	fmt.Printf("Data provided in registration process: %v\n", localStorage)
+	fmt.Printf("Cookie created:\n Name: %v\n Value: %v\n", cookie.Name, cookie.Value)
 	fmt.Println()
-	// errorMsg := url.QueryEscape("Testing the error messaging.")
-	// http.Redirect(w, req, "/?errormsg= "+errorMsg, http.StatusSeeOther)
+	// msg := url.QueryEscape("Testing the error messaging.")
+	// http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
+	// fmt.Printf("Response header: %v\n", w.Header())
 	http.Redirect(w, req, "/", http.StatusSeeOther)
 }
 
 //handle the login POST route - /login
 func (c Controller) login(w http.ResponseWriter, req *http.Request) {
 	if req.Method != http.MethodPost {
-		errorMsg := url.QueryEscape("Your method was not POST")
-		http.Redirect(w, req, "/?errormsg= "+errorMsg, http.StatusSeeOther)
+		msg := url.QueryEscape("Your method was not POST")
+		http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
 		return
 	}
 	email = req.FormValue("email")
 	if email == "" {
-		errorMsg := url.QueryEscape("Your email cannot be empty")
-		http.Redirect(w, req, "/?errormsg= "+errorMsg, http.StatusSeeOther)
+		msg := url.QueryEscape("Your email cannot be empty")
+		http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
 		return
 
 	}
 	password := req.FormValue("password")
 	if password == "" {
-		errorMsg := url.QueryEscape("You have not supplied a valid email/password ")
-		http.Redirect(w, req, "/?errormsg= "+errorMsg, http.StatusSeeOther)
+		msg := url.QueryEscape("You have not supplied a valid email/password ")
+		http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
 		return
 	}
 	//verify login credentials in localStorage map
 	// retrieve password
 	sp, ok := localStorage[email]
 	if !ok { //wrong email
-		errorMsg := url.QueryEscape("You need to register first!!")
-		http.Redirect(w, req, "/?errormsg= "+errorMsg, http.StatusSeeOther)
+		msg := url.QueryEscape("You need to register first!!")
+		http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
 		return
 	}
 	// verify password
 	err := bcrypt.CompareHashAndPassword(sp, []byte(password))
 	if err != nil {
-		errorMsg := url.QueryEscape("Wrong password")
-		http.Redirect(w, req, "/?errormsg= "+errorMsg, http.StatusSeeOther)
+		msg := url.QueryEscape("Wrong password")
+		http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
 		return
 	}
+	//create a session
+	sessionID, err = uuid.NewV4()
+	if err != nil {
+		msg = url.QueryEscape("Internal server error occured.")
+		http.Error(w, msg, http.StatusInternalServerError) //will display on separate page with only the error
+		return
+	}
+	session[sessionID] = makeCookieName(email)
 
+	//get cookie back
+	cookie, err := req.Cookie(session[sessionID])
+	if err == nil { //cookie exists for this session
+		cookie = &http.Cookie{} //clear the cookie
+	}
+	//re-create the cookie for session
+	//create the token
+	token := createToken(session[sessionID])
+	// populate cookie
+	cookie = &http.Cookie{
+		Name:  session[sessionID], //email
+		Value: token,              //token
+	}
+	//set the cookie
+	http.SetCookie(w, cookie)
+	// io.WriteString(w, "")
 	fmt.Printf("Password verified for: %v\n", localStorage)
+	fmt.Printf("Cookie set as: Name: %v Value: %v\n", cookie.Name, cookie.Value)
+	fmt.Println()
+	fmt.Println("email: ", session[sessionID])
 	fmt.Println()
 	//display the login screen
-	http.Redirect(w, req, "/success", http.StatusSeeOther)
-	// errorMsg := url.QueryEscape("Testing the error messaging.")
-	// http.Redirect(w, req, "/?errormsg= "+errorMsg, http.StatusSeeOther)
+	http.Redirect(w, req, "/", http.StatusSeeOther)
+	// msg := url.QueryEscape("Testing the error messaging.")
+	// http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
 }
 
 //handle the successful login  GET route - /success
 func (c Controller) success(w http.ResponseWriter, req *http.Request) {
 	// populate the template struct with empty values
 	// retrieve the email if provided before
-	errorMsg = req.FormValue("errormsg")
+	msg = req.FormValue("msg")
 	templateData := struct {
-		Email    string
-		ErrorMsg string
+		Email string
+		msg   string
 	}{
-		Email:    email,
-		ErrorMsg: errorMsg,
+		Email: session[sessionID],
+		msg:   msg,
 	}
 	c.tpl.ExecuteTemplate(w, "success.gohtml", templateData)
 }
