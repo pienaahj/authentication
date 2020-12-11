@@ -5,6 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="X-UA-Compatible" content="ie=edge">
     <title>Ninja level1 exercize</title>
+    <style>
+        h1 {color:red;}
+        p {color:blue;}
+        button {padding: 5px;
+                margin: 10px;}
+</style>
 </head>
 <body>
     <h1>{{if .Email}} You are logged in as: {{.Email}}{{else}} You are not logged in!{{end}}</h1>
@@ -24,5 +30,9 @@
         <p>Input password:</p>
         <input type="password" name="password" required>
         <button type="submit">Submit!</button>
+    </form>
+    <h1>Log out</h1>
+    <form method="POST" action="/logout" enctype="multipart/form-data">
+        <button type="submit">Logout!</button>
     </form>
 </body>    
