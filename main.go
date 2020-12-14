@@ -3,8 +3,10 @@ package main
 import (
 	"fmt"
 	"html/template"
+	"io/ioutil"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/pienaahj/authentication/conf"
 	"golang.org/x/oauth2"
@@ -70,11 +72,29 @@ func (c Controller) completeGithubOauth(w http.ResponseWriter, req *http.Request
 		http.Error(w, "Could not login", http.StatusInternalServerError)
 		return
 	}
+
 	// get the token source from token
 	ts := githubOauthConfig.TokenSource(req.Context(), token)
-	// get the http client from the token source
+
+	// get the http client from the token source you now have a client that is authenticated by the resource provider
 	client := oauth2.NewClient(req.Context(), ts)
 
+	// make a graphql request to github to look up the viewer's id
+	// construct the json query string (json keys without the values)
+	requestBody := strings.NewReader(`{"query":"{query {viewer {id}}"}`)
+	resp, err := client.Post("https://api.github.com/graphql", "application/json", requestBody)
+	if err != nil {
+		http.Error(w, "Cannot get user", http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+
+	bs, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		http.Error(w, "Cannot read github information", http.StatusInternalServerError)
+		return
+	}
+	log.Println(string(bs))
 }
 
 // 		// ********************* check valid session ****************************
