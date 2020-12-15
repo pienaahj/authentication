@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"io/ioutil"
@@ -18,6 +19,19 @@ type Controller struct {
 	tpl *template.Template
 }
 
+// GithibResponse struct
+type githubResponse struct {
+	Data struct {
+		Viewer struct {
+			ID string `json: "id"`
+		} `json:"viewer"`
+	} `json:"data"`
+}
+
+// db for github connections key:github ID value:user ID
+var githubConnections map[string]string
+
+// config for gitbub oauth2
 var githubOauthConfig = &oauth2.Config{
 	ClientID:     "538ea563d528f457bd46",
 	ClientSecret: "5d600c8c314322e4fadb141e8ce270bd348478c6",
@@ -46,7 +60,7 @@ func main() {
 
 // handle the index page GET route - /
 func (c Controller) index(w http.ResponseWriter, req *http.Request) {
-
+	c.tpl.ExecuteTemplate(w, "index.gohtml", nil)
 }
 
 // handle the startGithubOauth page POST route - /
@@ -81,7 +95,11 @@ func (c Controller) completeGithubOauth(w http.ResponseWriter, req *http.Request
 
 	// make a graphql request to github to look up the viewer's id
 	// construct the json query string (json keys without the values)
-	requestBody := strings.NewReader(`{"query":"{query {viewer {id}}"}`)
+	requestBody := strings.NewReader(`{"query":"query {viewer {id}}"}`)
+	// GraphQL query structure for github:
+	// { \
+	//	\"query\": \"query { viewer { login }}\" \
+	//  } \
 	resp, err := client.Post("https://api.github.com/graphql", "application/json", requestBody)
 	if err != nil {
 		http.Error(w, "Cannot get user", http.StatusInternalServerError)
@@ -94,7 +112,25 @@ func (c Controller) completeGithubOauth(w http.ResponseWriter, req *http.Request
 		http.Error(w, "Cannot read github information", http.StatusInternalServerError)
 		return
 	}
-	log.Println(string(bs))
+	log.Println(string(bs)) //JSON response from github: {"data":{"viewer":{"id":"MDQ6VXNlcjYzMDUzNjU0"}}}
+
+	// create a instance of githubresponse
+	var gr = githubResponse{}
+	// unmarshall github response
+	err = json.NewDecoder(resp.Body).Decode(&gr)
+	if err != nil {
+		http.Error(w, "Github invalid response!", http.StatusInternalServerError)
+		return
+	}
+	// get github id
+	githubID := gr.Data.Viewer.ID
+	// store in db
+	userID, ok := githubConnections[githubID]
+	if !ok {
+		// new user create account
+	}
+	// log into account with userID and JWT
+	fmt.Println("userID: ", userID)
 }
 
 // 		// ********************* check valid session ****************************
