@@ -14,7 +14,7 @@ type MyCustomClaims struct {
 	jwt.StandardClaims
 }
 
-const mySigningKey = "ourkey 1234"
+// const mySigningKey = "ourkey 1234"
 
 // createJWT uses input data - string and returns an JWT - string
 func createJWT(sID string) (string, error) {
