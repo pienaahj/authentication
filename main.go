@@ -46,7 +46,7 @@ var githubOauthConfig = &oauth2.Config{
 	Endpoint:     github.Endpoint,
 }
 
-// GithibResponse struct
+// githibResponse struct
 type githubResponse struct {
 	Data struct {
 		Viewer struct {
@@ -55,8 +55,19 @@ type githubResponse struct {
 	} `json:"data"`
 }
 
+// amazonResponse struct
+type amazonResponse struct {
+	UserID     string `json: "user_id"`
+	Email      string `json: "email"`
+	Name       string `json:"name"`
+	PostalCode string `json:"postal_code"`
+}
+
 // db for github connections key:github ID value:user ID
 var githubConnections map[string]string
+
+// db for connections key:<provider ID> value:user ID
+var connections map[string]string
 
 // config for gitbub oauth2
 var amazonOauthConfig = &oauth2.Config{
@@ -491,7 +502,19 @@ func (c Controller) completeGithubOauth(w http.ResponseWriter, req *http.Request
 // handle the completeGithubOauth page GET route - /oauth2/amazon/receive
 func (c Controller) completeAmazonOauth(w http.ResponseWriter, req *http.Request) {
 	code := req.FormValue("code")
+	if code == "" {
+		msg := url.QueryEscape("No code returned!")
+		http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
+		log.Printf("No code returned from Amazon\n")
+		return
+	}
 	stateReturned := req.FormValue("state")
+	if stateReturned == "" {
+		msg := url.QueryEscape("No code returned!")
+		http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
+		log.Printf("No code returned from Amazon\n")
+		return
+	}
 
 	// check that the state is correct or stil valid if you have a timeout
 	if rTime, ok := amazonState[stateReturned]; !ok {
@@ -504,7 +527,7 @@ func (c Controller) completeAmazonOauth(w http.ResponseWriter, req *http.Request
 		return
 	}
 
-	// get the token back
+	// echange the code for a token by accessing the TokenURL in the config
 	token, err := amazonOauthConfig.Exchange(req.Context(), code)
 	if err != nil {
 		http.Error(w, "Could not login", http.StatusInternalServerError)
@@ -512,9 +535,9 @@ func (c Controller) completeAmazonOauth(w http.ResponseWriter, req *http.Request
 		return
 	}
 	// the token received from amazon
-	log.Printf("Amazon token: %v\n", token)
+	log.Printf("Amazon token type: %v\n", token.TokenType)
 
-	// get the token source from token
+	// get the token source from token - this has both the current token and the refresh token - if it expires will auto refresh
 	ts := amazonOauthConfig.TokenSource(req.Context(), token)
 	log.Printf("Amazon token source: %v\n", ts)
 
@@ -524,42 +547,55 @@ func (c Controller) completeAmazonOauth(w http.ResponseWriter, req *http.Request
 	// amazon response
 	// http://localhost:8080/oauth2/amazon/receive?code=ANvVzJPdqkyACgzMPFBM&scope=profile&state=a3b2ca7e-324a-476f-8f0f-5294a3e84008
 
-	// make a graphql request to github to look up the viewer's id
-	// construct the json query string (json keys without the values)
-	// requestBody := strings.NewReader(`{"query":"query {viewer {id}}"}`)
-	// // GraphQL query structure for github:
-	// // { \
-	// //	\"query\": \"query { viewer { login }}\" \
-	// //  } \
-	// resp, err := client.Post("https://api.github.com/graphql", "application/json", requestBody)
-	// if err != nil {
-	// 	http.Error(w, "Cannot get user", http.StatusInternalServerError)
-	// 	return
-	// }
-	// defer resp.Body.Close()
+	// construct the query string as "access_token= token"
+	// accessToken := "access_token=" + token.AccessToken
+	// requestBody := strings.NewReader(accessToken)
 
-	// bs, err := ioutil.ReadAll(resp.Body)
-	// if err != nil {
-	// 	http.Error(w, "Cannot read github information", http.StatusInternalServerError)
-	// 	return
-	// }
-	// log.Println(string(bs)) //JSON response from github: {"data":{"viewer":{"id":"MDQ6VXNlcjYzMDUzNjU0"}}}
+	resp, err := client.Get("https://api.amazon.com/user/profile")
+	if err != nil {
+		http.Error(w, "Cannot get user", http.StatusInternalServerError)
+		log.Printf("Amazon response error occured! %v\n", err)
+		return
+	}
+	// its is the caller's responsibility to close the resp.body
+	defer resp.Body.Close()
 
-	// // create a instance of githubresponse
-	// var gr = githubResponse{}
-	// // unmarshall github response
-	// err = json.NewDecoder(resp.Body).Decode(&gr)
-	// if err != nil {
-	// 	http.Error(w, "Github invalid response!", http.StatusInternalServerError)
-	// 	return
-	// }
-	// // get github id
-	// githubID := gr.Data.Viewer.ID
-	// // store in db
-	// userID, ok := githubConnections[githubID]
-	// if !ok {
-	// 	// new user create account
-	// }
-	// // log into account with userID and JWT
-	// fmt.Println("userID: ", userID)
+	bs, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		http.Error(w, "Cannot read amazon information", http.StatusInternalServerError)
+		log.Printf("Cannot read from Amazon response body! %v\n", string(bs))
+		return
+	}
+
+	// check the resp status codes for errors
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		http.Error(w, "Amazon response error occured", http.StatusInternalServerError)
+		log.Printf("Amazon response status error occured! %v\n", string(bs))
+		return
+	}
+
+	log.Printf("Json response from Amazon: %s\n", string(bs))
+	//JSON response from amazon:
+	// {"user_id":"amzn1.account.AGLMAOQ2KNQ3PHKHGDSQJZQCF2EA","name":"HJ Pienaar","email":"pienaahj@gmail.com"}
+
+	// // create a instance of amazonResponse
+	var gr = amazonResponse{}
+	// unmarshall amazon response
+	err = json.NewDecoder(resp.Body).Decode(&gr)
+	if err != nil {
+		http.Error(w, "Amazon invalid response!", http.StatusInternalServerError)
+		log.Printf("Amazon invalid response! %v\n", err)
+		return
+	}
+	// get amazon id
+	ID := gr.UserID
+	// store in db
+	userID, ok := connections[ID]
+	if !ok {
+		log.Printf("Creating new Amazon user in connections, User id: %v...\n", userID)
+		// store connection
+		// new user create account
+	}
+	// log into account with userID and JWT
+	fmt.Println("userID: ", userID)
 }
