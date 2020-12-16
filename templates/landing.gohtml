@@ -31,6 +31,12 @@
         <input type="password" name="password" required>
         <button type="submit">Submit!</button>
     </form>
+    <form method="POST" action="/oauth2/github/login" enctype="multipart/form-data">
+        <button type="submit">Log in with github</button>
+    </form>
+    <form method="POST" action="/oauth2/amazon/login" enctype="multipart/form-data">
+        <button type="submit">Log in with amazon</button>
+    </form>
     <h1>Log out</h1>
     <form method="POST" action="/logout" enctype="multipart/form-data">
         <button type="submit">Logout!</button>
