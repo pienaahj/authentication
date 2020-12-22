@@ -50,24 +50,24 @@ var githubOauthConfig = &oauth2.Config{
 type githubResponse struct {
 	Data struct {
 		Viewer struct {
-			ID string `json: "id"`
+			ID string `json:"id"`
 		} `json:"viewer"`
 	} `json:"data"`
 }
 
 // amazonResponse struct
 type amazonResponse struct {
-	UserID     string `json: "user_id"`
-	Email      string `json: "email"`
-	Name       string `json:"name"`
-	PostalCode string `json:"postal_code"`
+	UserID string `json:"user_id"`
+	Name   string `json:"name"`
+	Email  string `json:"email"`
+	// PostalCode string `json:"postal_code"`
 }
 
 // db for github connections key:github ID value:user ID
-var githubConnections map[string]string
+// var githubConnections map[string]string
 
-// db for connections key:<provider ID> value:user ID
-var connections map[string]string
+// db for oauthConnections key:<provider ID> value:user ID(email)
+var oauthConnections = map[string]string{}
 
 // config for gitbub oauth2
 var amazonOauthConfig = &oauth2.Config{
@@ -79,6 +79,7 @@ var amazonOauthConfig = &oauth2.Config{
 	Scopes: []string{"profile"},
 }
 var (
+	// create a sessions id type uuid
 	sessionID uuid.UUID
 	// create map to store sessions of UUID(sessionID) per email
 	sessions = map[string]uuid.UUID{}
@@ -89,7 +90,7 @@ var (
 	// create a state for oauth2 type uuid
 	stateUUID uuid.UUID
 	// create the oauth2 login map key: state uuid type string, value: expiration duration type time.Time
-	amazonState = map[string]time.Time{}
+	oauth2State = map[string]time.Time{}
 )
 
 // NewController provides new controller for template processing
@@ -108,7 +109,7 @@ func main() {
 	// handle the login route
 	http.HandleFunc("/login", c.login)
 	//hangle the successful login route
-	http.HandleFunc("/success", c.success)
+	// http.HandleFunc("/success", c.success)
 	// handle the logout route
 	http.HandleFunc("/logout", c.logout)
 	// handle the amazon oauth login route POST
@@ -116,7 +117,7 @@ func main() {
 	// handle the startOauthGithub route POST
 	http.HandleFunc("/oauth2/github/login", c.oath2GithubLogin)
 	// handle the completeGithubOauth route
-	// http.HandleFunc("/oauth2/receive", c.completeGithubOauth)
+	http.HandleFunc("/oauth2/github/receive", c.completeGithubOauth)
 	// handle the completeAmazonOauth route
 	http.HandleFunc("/oauth2/amazon/receive", c.completeAmazonOauth)
 
@@ -128,7 +129,24 @@ func main() {
 // handle the oath2GithubLogin page POST route - /aouth/gitbub/login
 func (c Controller) oath2GithubLogin(w http.ResponseWriter, req *http.Request) {
 	// You will typically use a db to hold the AuthCodeURLs for specific login attemps
-	redirectURL := githubOauthConfig.AuthCodeURL("0000") //code&state gets put into the redirect url on github page
+	if req.Method != http.MethodPost {
+		msg = url.QueryEscape("Your method was not POST")
+		http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
+		return
+	}
+	// create the oauth2State
+	stateUUID, err := uuid.NewV4()
+	if err != nil {
+		msg = url.QueryEscape(err.Error())
+		http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
+		fmt.Printf("Could not create uuid for Github state: %v", err)
+		return
+	}
+	state := stateUUID.String()
+	oauth2State[state] = time.Now().Add(time.Hour) // expire the state at 1 hour
+	log.Printf("The Github state: %v created\n with expiary time: %v\n", state, oauth2State[state])
+	redirectURL := githubOauthConfig.AuthCodeURL(state)
+	//code&state gets put into the redirect url on github page
 	http.Redirect(w, req, redirectURL, http.StatusSeeOther)
 }
 
@@ -139,7 +157,7 @@ func (c Controller) oauth2AmazonLogin(w http.ResponseWriter, req *http.Request) 
 		http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
 		return
 	}
-	// create the amazonState
+	// create the oauth2State
 	stateUUID, err := uuid.NewV4()
 	if err != nil {
 		msg = url.QueryEscape(err.Error())
@@ -148,8 +166,8 @@ func (c Controller) oauth2AmazonLogin(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 	state := stateUUID.String()
-	amazonState[state] = time.Now().Add(time.Hour) // expire the state at 1 hour
-	log.Printf("The amazon state: %v created\n with expiary time: %v\n", state, amazonState[state])
+	oauth2State[state] = time.Now().Add(time.Hour) // expire the state at 1 hour
+	log.Printf("The amazon state: %v created\n with expiary time: %v\n", state, oauth2State[state])
 	redirectURL := amazonOauthConfig.AuthCodeURL(state)
 	//code&state gets put into the redirect url on amazon page
 	http.Redirect(w, req, redirectURL, http.StatusSeeOther)
@@ -158,11 +176,10 @@ func (c Controller) oauth2AmazonLogin(w http.ResponseWriter, req *http.Request) 
 // handle the root page GET route - /
 func (c Controller) register(w http.ResponseWriter, req *http.Request) {
 	fmt.Println("Root page started")
-	// get cookie back
-	fmt.Printf("Email: %v\n", sessions[email])
+	fmt.Printf("Email: %v\n", myUser.email)
 	fmt.Println()
 	// see if there is session
-	if sessions[email] == uuid.Nil { // no session
+	if sessions[myUser.email] == uuid.Nil { // no session
 		// clear the cookie
 		cookie := &http.Cookie{}
 		email = ""
@@ -183,11 +200,16 @@ func (c Controller) register(w http.ResponseWriter, req *http.Request) {
 	} else {
 		// there is session
 		cookie, err := req.Cookie(cookieName) // get the cookie back
+		// fmt.Printf("Cookie set in root page as: Name: %v\n Value: %v\n", cookie.Name, cookie.Value)
+		// fmt.Println()
+		if err != nil { //no session
+			fmt.Printf("There is session, but cannot retrieve cookie %v\n", cookie)
+			msg = url.QueryEscape(err.Error())
+			http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
+			return
+		}
 		fmt.Printf("There is session, Cookie: %v\n", cookie)
 		fmt.Println()
-		if err != nil { //no session
-			fmt.Printf("cannot retrieve cookie %v\n", cookie)
-		}
 
 		// ********************* check valid session ****************************
 		fmt.Println("Checkking valid session......")
@@ -335,62 +357,55 @@ func (c Controller) login(w http.ResponseWriter, req *http.Request) {
 		sessions[myUser.email] = uuid.Nil
 		return
 	}
-	// create a session
-	sessionID, err = uuid.NewV4()
-	if err != nil {
-		msg = url.QueryEscape("Internal server error occured.")
-		http.Error(w, msg, http.StatusInternalServerError) //will display on separate page with only the error
-		return
-	}
-	sessions[email] = sessionID
+	// // create a session
+	// sessionID, err = uuid.NewV4()
+	// if err != nil {
+	// 	msg = url.QueryEscape("Internal server error occured.")
+	// 	http.Error(w, msg, http.StatusInternalServerError) //will display on separate page with only the error
+	// 	return
+	// }
+	// sessions[email] = sessionID
 
-	// get cookie back
-	cookie, err := req.Cookie(cookieName)
-	if err == nil { // cookie exists for this session
-		cookie = &http.Cookie{} // clear the cookie
-	}
-	// re-create the cookie for session
-	// create the token
-	// JWT token
-	token, err := createJWT(myUser.email)
+	// // get cookie back
+	// cookie, err := req.Cookie(cookieName)
+	// if err == nil { // cookie exists for this session
+	// 	cookie = &http.Cookie{} // clear the cookie
+	// }
+	// // re-create the cookie for session
+	// // create the token
+	// // JWT token
+	// token, err := createJWT(myUser.email)
+	// if err != nil {
+	// 	log.Printf("Error while verifying JWT token: %v\n", err)
+	// 	msg = url.QueryEscape("Internal server error occured.")
+	// 	http.Error(w, msg, http.StatusInternalServerError) //will display on separate page with only the error
+	// 	return
+	// }
+	// // populate cookie
+	// cookie = &http.Cookie{
+	// 	Name:  cookieName,
+	// 	Value: token, //token
+	// }
+	// // set the cookie
+	// http.SetCookie(w, cookie)
+	// fmt.Printf("Password verified for: %v\n", myUser.email)
+	// fmt.Printf("Cookie set as: Name: %v Value: %v\n", cookie.Name, cookie.Value)
+	// fmt.Println()
+	// fmt.Println("email: ", sessions[myUser.email])
+	// fmt.Println()
+
+	// log into account with userID and JWT
+	err = createSession(w, myUser.email)
 	if err != nil {
-		log.Printf("Error while verifying JWT token: %v\n", err)
-		msg = url.QueryEscape("Internal server error occured.")
+		msg = url.QueryEscape("Internal server error occured: " + err.Error())
 		http.Error(w, msg, http.StatusInternalServerError) //will display on separate page with only the error
-		return
 	}
-	// populate cookie
-	cookie = &http.Cookie{
-		Name:  cookieName,
-		Value: token, //token
-	}
-	// set the cookie
-	http.SetCookie(w, cookie)
-	fmt.Printf("Password verified for: %v\n", myUser.email)
-	fmt.Printf("Cookie set as: Name: %v Value: %v\n", cookie.Name, cookie.Value)
-	fmt.Println()
-	fmt.Println("email: ", sessions[myUser.email])
-	fmt.Println()
+
 	// display the login screen
 	http.Redirect(w, req, "/", http.StatusSeeOther)
 }
 
-// handle the successful login  GET route - /success
-func (c Controller) success(w http.ResponseWriter, req *http.Request) {
-	// populate the template struct with empty values
-	// retrieve the email if provided before
-	msg = req.FormValue("msg")
-	templateData := struct {
-		Email string
-		msg   string
-	}{
-		Email: myUser.email,
-		msg:   msg,
-	}
-	c.tpl.ExecuteTemplate(w, "success.gohtml", templateData)
-}
-
-// handle the logout POST route - /login
+// handle the logout POST route - /logout
 func (c Controller) logout(w http.ResponseWriter, req *http.Request) {
 	if req.Method != http.MethodPost {
 		msg := url.QueryEscape("Your method was not POST")
@@ -438,26 +453,46 @@ func (c Controller) logout(w http.ResponseWriter, req *http.Request) {
 // handle the completeGithubOauth page GET route - /
 func (c Controller) completeGithubOauth(w http.ResponseWriter, req *http.Request) {
 	code := req.FormValue("code")
-	state := req.FormValue("state")
+	if code == "" {
+		msg := url.QueryEscape("No code returned!")
+		http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
+		log.Printf("No code returned from Github.\n")
+		return
+	}
+	stateReturned := req.FormValue("state")
+	if stateReturned == "" {
+		msg := url.QueryEscape("No code returned!")
+		http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
+		log.Printf("No code returned from Github\n")
+		return
+	}
 
-	// check that the state is correct or stil valid if you have a timeout
-	if state != "0000" {
+	// check that the state is correct or still valid if you have a timeout
+	if rTime, ok := oauth2State[stateReturned]; !ok {
 		http.Error(w, "State is not correct!", http.StatusBadRequest)
+		log.Printf("The Github state is invalid!")
+		return
+	} else if rTime.Before(time.Now()) {
+		http.Error(w, "State expired!", http.StatusBadRequest)
+		log.Printf("The Github state has expired! Time now: %v\n Expiry time for state: %v\n", time.Now(), rTime)
 		return
 	}
 	// get the token back
 	token, err := githubOauthConfig.Exchange(req.Context(), code)
 	if err != nil {
 		http.Error(w, "Could not login", http.StatusInternalServerError)
+		log.Printf("Could not get token from Github, for code: %v\n", code)
 		return
 	}
+	// the token received from Github
+	log.Printf("Github token type: %v\n", token.TokenType)
 
 	// get the token source from token
 	ts := githubOauthConfig.TokenSource(req.Context(), token)
 
 	// get the http client from the token source you now have a client that is authenticated by the resource provider
 	client := oauth2.NewClient(req.Context(), ts)
-
+	fmt.Printf("Github client: %v\n", client)
 	// make a graphql request to github to look up the viewer's id
 	// construct the json query string (json keys without the values)
 	requestBody := strings.NewReader(`{"query":"query {viewer {id}}"}`)
@@ -474,28 +509,67 @@ func (c Controller) completeGithubOauth(w http.ResponseWriter, req *http.Request
 
 	bs, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		http.Error(w, "Cannot read github information", http.StatusInternalServerError)
+		http.Error(w, "Cannot read Github information", http.StatusInternalServerError)
 		return
 	}
 	log.Println(string(bs)) //JSON response from github: {"data":{"viewer":{"id":"MDQ6VXNlcjYzMDUzNjU0"}}}
-
+	log.Printf("Json response from Github: %s\n", string(bs))
 	// create a instance of githubresponse
 	var gr = githubResponse{}
 	// unmarshall github response
-	err = json.NewDecoder(resp.Body).Decode(&gr)
+	err = json.Unmarshal(bs, &gr)
 	if err != nil {
 		http.Error(w, "Github invalid response!", http.StatusInternalServerError)
+		log.Printf("Github invalid response! %v\n", err)
 		return
 	}
+
 	// get github id
 	githubID := gr.Data.Viewer.ID
 	// store in db
-	userID, ok := githubConnections[githubID]
+	_, ok := oauthConnections[githubID]
 	if !ok {
 		// new user create account
+		// create a registered user
+		myUser.email = "test@gmail.com"
+		myUser.password = []byte("1234")
+		// encrypt password
+		passW, err := bcrypt.GenerateFromPassword([]byte(myUser.password), bcrypt.DefaultCost)
+		if err != nil {
+			msg = url.QueryEscape("Internal server error occured.")
+			http.Error(w, msg, http.StatusInternalServerError) // will display on separate page with only the error
+			return
+		}
+		myUser.password = passW
+
+		// store connection with
+		log.Printf("storing user: %v\n in oauthSession with Github ID: %s\n", myUser, githubID)
+		oauthConnections[githubID] = myUser.email
 	}
 	// log into account with userID and JWT
-	fmt.Println("userID: ", userID)
+	fmt.Println("loggin in userID: ", githubID)
+	fmt.Println()
+	err = createSession(w, myUser.email)
+	if err != nil {
+		msg = url.QueryEscape("Internal server error occured: " + err.Error())
+		http.Error(w, msg, http.StatusInternalServerError) //will display on separate page with only the error
+	}
+	fmt.Println("****************************** - User logged in with Github oauth2 - **************************")
+	fmt.Println()
+	// ****************************************************************************************************************
+	cookie, err := req.Cookie(cookieName) // get the cookie back
+	if err != nil {                       //no session
+		fmt.Printf("There is session, but cannot retrieve cookie %v\n", cookie)
+		msg = url.QueryEscape(err.Error())
+		http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
+		return
+	}
+	fmt.Printf("Cookie set after Github oauth2 as: Name: %v\n Value: %v\n", cookie.Name, cookie.Value)
+	// ****************************************************************************************************************
+	fmt.Println()
+	// display the login screen
+	http.Redirect(w, req, "/", http.StatusSeeOther)
+	return
 }
 
 // ************************************** amazon complete ************************************************
@@ -516,8 +590,8 @@ func (c Controller) completeAmazonOauth(w http.ResponseWriter, req *http.Request
 		return
 	}
 
-	// check that the state is correct or stil valid if you have a timeout
-	if rTime, ok := amazonState[stateReturned]; !ok {
+	// check that the state is correct or still valid if you have a timeout
+	if rTime, ok := oauth2State[stateReturned]; !ok {
 		http.Error(w, "State is not correct!", http.StatusBadRequest)
 		log.Printf("The amazon state is invalid!")
 		return
@@ -527,7 +601,8 @@ func (c Controller) completeAmazonOauth(w http.ResponseWriter, req *http.Request
 		return
 	}
 
-	// echange the code for a token by accessing the TokenURL in the config
+	// exchange the code for a token(access token - which can expire) by accessing the TokenURL in the config
+	// browser never sees token, only code
 	token, err := amazonOauthConfig.Exchange(req.Context(), code)
 	if err != nil {
 		http.Error(w, "Could not login", http.StatusInternalServerError)
@@ -542,14 +617,11 @@ func (c Controller) completeAmazonOauth(w http.ResponseWriter, req *http.Request
 	log.Printf("Amazon token source: %v\n", ts)
 
 	// get the http client from the token source you now have a client that is authenticated by the resource provider
+	// with a client you can do get request to find the scope items - like user-id
 	client := oauth2.NewClient(req.Context(), ts)
 	fmt.Printf("Amazon client: %v\n", client)
 	// amazon response
 	// http://localhost:8080/oauth2/amazon/receive?code=ANvVzJPdqkyACgzMPFBM&scope=profile&state=a3b2ca7e-324a-476f-8f0f-5294a3e84008
-
-	// construct the query string as "access_token= token"
-	// accessToken := "access_token=" + token.AccessToken
-	// requestBody := strings.NewReader(accessToken)
 
 	resp, err := client.Get("https://api.amazon.com/user/profile")
 	if err != nil {
@@ -557,12 +629,12 @@ func (c Controller) completeAmazonOauth(w http.ResponseWriter, req *http.Request
 		log.Printf("Amazon response error occured! %v\n", err)
 		return
 	}
-	// its is the caller's responsibility to close the resp.body
+	// it is the caller's responsibility to close the resp.body
 	defer resp.Body.Close()
 
 	bs, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		http.Error(w, "Cannot read amazon information", http.StatusInternalServerError)
+		http.Error(w, "Cannot read Amazon information", http.StatusInternalServerError)
 		log.Printf("Cannot read from Amazon response body! %v\n", string(bs))
 		return
 	}
@@ -576,26 +648,99 @@ func (c Controller) completeAmazonOauth(w http.ResponseWriter, req *http.Request
 
 	log.Printf("Json response from Amazon: %s\n", string(bs))
 	//JSON response from amazon:
-	// {"user_id":"amzn1.account.AGLMAOQ2KNQ3PHKHGDSQJZQCF2EA","name":"HJ Pienaar","email":"pienaahj@gmail.com"}
+	// {"user_id":"amzn1.account.AGLMAOQ2KNQ3PHKHG00000","name":"HJ Pienaar","email":"pienaahj@gmail.com"}
 
 	// // create a instance of amazonResponse
 	var gr = amazonResponse{}
 	// unmarshall amazon response
-	err = json.NewDecoder(resp.Body).Decode(&gr)
+	// err = json.NewDecoder(resp.Body).Decode(&gr)
+	err = json.Unmarshal(bs, &gr)
 	if err != nil {
 		http.Error(w, "Amazon invalid response!", http.StatusInternalServerError)
 		log.Printf("Amazon invalid response! %v\n", err)
 		return
 	}
-	// get amazon id
-	ID := gr.UserID
-	// store in db
-	userID, ok := connections[ID]
-	if !ok {
-		log.Printf("Creating new Amazon user in connections, User id: %v...\n", userID)
-		// store connection
-		// new user create account
+	log.Printf("User from amazon: %v\n", gr)
+
+	// get amazon id & store in db
+	_, ok := oauthConnections[gr.UserID]
+	if !ok { // user does not exist
+		log.Printf("Creating new Amazon user in connections, User id: %v...\n", gr.UserID)
+
+		// new user: create account
+		// create a registered user
+		myUser.email = "test@gmail.com"
+		myUser.password = []byte("1234")
+		// encrypt password
+		passW, err := bcrypt.GenerateFromPassword([]byte(myUser.password), bcrypt.DefaultCost)
+		if err != nil {
+			msg = url.QueryEscape("Internal server error occured.")
+			http.Error(w, msg, http.StatusInternalServerError) // will display on separate page with only the error
+			return
+		}
+		myUser.password = passW
+
+		// store connection with
+		log.Printf("storing user: %v\n in oauthSession with amazon ID: %s\n", myUser, gr.UserID)
+		oauthConnections[gr.UserID] = myUser.email
 	}
 	// log into account with userID and JWT
-	fmt.Println("userID: ", userID)
+	fmt.Println("loggin in userID: ", gr.UserID)
+	fmt.Println()
+	err = createSession(w, myUser.email)
+	if err != nil {
+		msg = url.QueryEscape("Internal server error occured: " + err.Error())
+		http.Error(w, msg, http.StatusInternalServerError) //will display on separate page with only the error
+	}
+	fmt.Println("****************************** - User logged in with Amazon oauth2 - **************************")
+	fmt.Println()
+	// ****************************************************************************************************************
+	cookie, err := req.Cookie(cookieName) // get the cookie back
+	if err != nil {                       //no session
+		fmt.Printf("There is session, but cannot retrieve cookie %v\n", cookie)
+		msg = url.QueryEscape(err.Error())
+		http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
+		return
+	}
+	fmt.Printf("Cookie set after Amazon oauth2 as: Name: %v\n Value: %v\n", cookie.Name, cookie.Value)
+	// ****************************************************************************************************************
+	fmt.Println()
+	// display the login screen
+	http.Redirect(w, req, "/", http.StatusSeeOther)
+	return
+}
+
+// createSession creates an user session
+func createSession(w http.ResponseWriter, email string) error {
+	// create a session
+	sessionID, err := uuid.NewV4()
+	if err != nil {
+		return fmt.Errorf("could not create seesion id: %w", err)
+	}
+	// create session for user in sessions map
+	sessions[email] = sessionID
+
+	// re-create the cookie for session
+	// create the token
+	// JWT token
+	token, err := createJWT(email)
+	if err != nil {
+		log.Printf("Error while verifying JWT token: %v\n", err)
+		return fmt.Errorf("could not create seesion id: %w", err)
+	}
+	// populate cookie
+	cookie := &http.Cookie{
+		Name:  cookieName,
+		Value: token, // token
+		Path:  "/",   // THIS IS ESSECIAL FOR OAUTH2 TO WORK!!!!! A COOKIE IS SCOPED!THIS ONE IS ON AMAZON/RECIEVE
+		// SO YOU NEED TO RESCOPE IT TO "/"
+		// SameSite: http.SameSiteNoneMode,
+		// Secure:   false,
+	}
+	// set the cookie
+	http.SetCookie(w, cookie)
+	fmt.Printf("Password verified for: %v\n", email)
+	fmt.Printf("Cookie set as: Name: %v\n Value: %v\n", cookie.Name, cookie.Value)
+	fmt.Println()
+	return nil
 }
