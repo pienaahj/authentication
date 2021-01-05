@@ -15,14 +15,20 @@
 </head>
 <body>
     <h1>{{if .Email}} You are logged in as: {{.Email}}{{else}} You are not logged in!{{end}}</h1>
-    <p> {{if .Msg}} Error Message: {{.Msg}}{{end}}</p>
+    <p> {{if .Msg}} Message: {{.Msg}}{{end}}</p>
     <h1>Register:</h1>
     <form method="POST" action="/process" enctype="multipart/form-data">
+        <p>Input name:</p>
+        <input type="text" name="name" placeholder="name">
+        <p>Input age:</p>
+        <input type="text" name="age" placeholder="age">
         <p>Input email:</p>
         <input type="email" name="email" placeholder="email" required>
         <p>Input password:</p>
         <input type="password" name="password" required>
-        <button type="submit">Submit!</button>
+        <input type="checkbox" name="terms" id="terms" checked>
+        <label for="terms">Accept terms of Service</label>
+        <button type="submit">Submit!</button>   
     </form>
     <h1>Login:</h1>
     <form method="POST" action="/login" enctype="multipart/form-data">

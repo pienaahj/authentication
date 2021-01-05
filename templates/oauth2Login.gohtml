@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>Authorization register page</title>
+    <style>
+        h1 {color:red;}
+        p {color:blue;}
+        button {padding: 5px;
+                margin: 10px;}
+</style>
+</head>
+<body>
+    <form method="POST" action="/oauth/register" enctype="multipart/form-data">
+        <p>Input name:</p>
+        <input type="text" name="name" placeholder={{.Name}}>
+        <label for="name">Name</label>
+        <p>Input age:</p>
+        <input type="text" name="age" placeholder="age">
+        <label for="age">Age</label>
+        <p>Input email:</p>
+        <input type="email" name="email" placeholder={{.Email}} required>
+        <label for="email">Email</label>
+        <input type="checkbox" name="terms" id="terms" value="true" checked>
+        <label for="terms">Accept terms of Service</label>
+        <input type="hidden" name="sid" value={{.SID}} placeholder="sid">
+        <button type="submit">Submit</button>
+    </form>
+</body> 

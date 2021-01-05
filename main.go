@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,10 +34,13 @@ const (
 
 // userDB struct for users data
 type userDB struct {
-	email      string //email or username
-	cookieName string //optional for future use
-	password   []byte //bcrypted user password
-	passW      string //unencrpted user password
+	name       string // user's name
+	age        int    //user's age
+	terms      bool   // terms of service accepted
+	email      string // email or username
+	cookieName string // optional for future use
+	password   []byte // bcrypted user password
+	passW      string // unencrpted user password
 }
 
 // config for gitbub oauth2
@@ -81,10 +85,12 @@ var amazonOauthConfig = &oauth2.Config{
 var (
 	// create a sessions id type uuid
 	sessionID uuid.UUID
-	// create map to store sessions of UUID(sessionID) per email
+	// create map to store sessions key:email values: UUID(sessionID)
 	sessions = map[string]uuid.UUID{}
 	email    string //temperary storage for user email
+	name     string //temperary storage for user name
 	msg      string //use as message field
+	sToken   string //signed JWT token
 	// Get a useDB instance
 	myUser = userDB{}
 	// create a state for oauth2 type uuid
@@ -116,10 +122,14 @@ func main() {
 	http.HandleFunc("/oauth2/amazon/login", c.oauth2AmazonLogin)
 	// handle the startOauthGithub route POST
 	http.HandleFunc("/oauth2/github/login", c.oath2GithubLogin)
-	// handle the completeGithubOauth route
+	// handle the completeGithubOauth route GET
 	http.HandleFunc("/oauth2/github/receive", c.completeGithubOauth)
-	// handle the completeAmazonOauth route
+	// handle the completeAmazonOauth route GET
 	http.HandleFunc("/oauth2/amazon/receive", c.completeAmazonOauth)
+	// handle partial-register route GET
+	http.HandleFunc("/partial-register", c.partialRegister)
+	// handle oauth/register route POST
+	http.HandleFunc("/oauth/register", c.oauth2Register)
 
 	http.Handle("/favicon.ico", http.NotFoundHandler())
 	fmt.Println("server running on port :8080")
@@ -173,6 +183,88 @@ func (c Controller) oauth2AmazonLogin(w http.ResponseWriter, req *http.Request) 
 	http.Redirect(w, req, redirectURL, http.StatusSeeOther)
 }
 
+// handle the oauth2Register page POST route - /oauth/register
+func (c Controller) oauth2Register(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		msg = url.QueryEscape("Your method was not POST")
+		http.Redirect(w, req, "/partial-register?msg= "+msg, http.StatusSeeOther)
+		return
+	}
+	email = req.FormValue("email")
+	if email == "" {
+		msg = url.QueryEscape("Your email cannot be empty")
+		http.Redirect(w, req, "/partial-register?msg= "+msg, http.StatusSeeOther)
+		return
+	}
+	// check if email exist
+	if myUser.email == email {
+		msg = url.QueryEscape("You have not supplied a valid email/password ")
+		http.Redirect(w, req, "/partial-register?msg= "+msg, http.StatusSeeOther)
+		return
+	}
+
+	// store email in myUser
+	myUser.email = email
+	// store name, age and terms in myUser
+	myUser.name = req.FormValue("name")
+	ageT, err := strconv.Atoi(req.FormValue("age"))
+	if err != nil {
+		msg = url.QueryEscape("You have not supplied a valid age ")
+		http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
+		return
+	}
+	myUser.age = ageT
+	// check if user has not accepted the terms and store it
+	if len(req.Form["terms"]) < 1 {
+		msg = url.QueryEscape("You have not accepted the terms and conditions!")
+		http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
+		return
+	}
+	terms := req.Form["terms"][0]
+	fmt.Println("terms: ", terms)
+	myUser.terms = true
+	// retrieve the signed userid
+	githubID := req.FormValue("sid")
+
+	// store connection with
+	log.Printf("storing user: %v\n in oauthSession with Github ID: %s\n", sToken, githubID)
+	oauthConnections[githubID] = myUser.email
+	// log into account with userID and JWT
+	fmt.Println("loggin in userID: ", githubID)
+	fmt.Println()
+	err = createSession(w, myUser.email)
+	if err != nil {
+		msg = url.QueryEscape("Internal server error occured: " + err.Error())
+		http.Error(w, msg, http.StatusInternalServerError) //will display on separate page with only the error
+	}
+	fmt.Println("****************************** - User logged in with Github oauth2 - **************************")
+	fmt.Println()
+	// ****************************************************************************************************************
+
+	// ****************************************************************************************************************
+	fmt.Println()
+	// display the login screen
+	http.Redirect(w, req, "/", http.StatusSeeOther)
+}
+
+// handle partialRegister GET route - /partial-register
+func (c Controller) partialRegister(w http.ResponseWriter, req *http.Request) {
+
+	// populate the template struct with values
+	templateData := struct {
+		Email string
+		SID   string
+		Name  string
+		Msg   string
+	}{
+		Email: email,  // pre-populate retrieved email
+		SID:   sToken, // push in the signed userID
+		Name:  name,   // pre-populate retrieved name
+		Msg:   msg,
+	}
+	c.tpl.ExecuteTemplate(w, "oauth2Login.gohtml", templateData)
+}
+
 // handle the root page GET route - /
 func (c Controller) register(w http.ResponseWriter, req *http.Request) {
 	fmt.Println("Root page started")
@@ -197,85 +289,66 @@ func (c Controller) register(w http.ResponseWriter, req *http.Request) {
 			Msg:   msg,
 		}
 		c.tpl.ExecuteTemplate(w, "landing.gohtml", templateData)
-	} else {
-		// there is session
-		cookie, err := req.Cookie(cookieName) // get the cookie back
-		// fmt.Printf("Cookie set in root page as: Name: %v\n Value: %v\n", cookie.Name, cookie.Value)
-		// fmt.Println()
-		if err != nil { //no session
-			fmt.Printf("There is session, but cannot retrieve cookie %v\n", cookie)
-			msg = url.QueryEscape(err.Error())
-			http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
-			return
-		}
-		fmt.Printf("There is session, Cookie: %v\n", cookie)
-		fmt.Println()
-
-		// ********************* check valid session ****************************
-		fmt.Println("Checkking valid session......")
-		fmt.Println()
-		// retrieve the token
-		oldToken := cookie.Value
-		fmt.Printf("Cookie retrieved as:\n Name: %v\n Value: %v\n", cookie.Name, cookie.Value)
-		fmt.Println()
-
-		// JWT parseJWT token
-		sID, err := parseJWT(oldToken)
-		if err != nil { // error parsing token - hacked!
-			msg = url.QueryEscape(err.Error())
-			http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
-			fmt.Printf("Could not parse token: %v", oldToken)
-			fmt.Println()
-			return
-		}
-		fmt.Println("Token verified....")
-		// lookup uuid from sID
-		fmt.Printf("Using %v as sID\n", sID)
-		// look the sID up in session map
-		sUUID, ok := sessions[sID]
-		if !ok {
-			msg = url.QueryEscape(err.Error())
-			http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
-			fmt.Printf("Invalid session for: %v", sID)
-			fmt.Println()
-			return
-		}
-		// // compare the stored uuid to the generated uuid from sID
-		// ssID, err := uuid.FromString(sUUID.String())
-		// if err != nil { // wrong sID
-		// 	msg = url.QueryEscape(err.Error())
-		// 	http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
-		// 	fmt.Printf("Could not parse UUID")
-		// 	fmt.Println()
-		// 	return
-		// }
-		// fmt.Println("UUID verified....")
-		// // lookup the SessionID in map
-		// if _, ok := sessions[ssID]; !ok {
-		// 	fmt.Println("No valid session in root page, cannot find sessions map!")
-		// 	msg = "" // no valid session
-		// 	email = ""
-		// } else {
-		// 	fmt.Println("Valid session in root page.")
-		// 	msg = ""
-		// 	email = sID
-		// }
-		fmt.Println("UUID verified as : ", sUUID)
-		fmt.Println("Valid session in root page.")
-		msg = ""
-		email = sID
-		//******************************* end check valid session ***************************************
-
-		// populate the template struct with values
-		templateData := struct {
-			Email string
-			Msg   string
-		}{
-			Email: myUser.email,
-			Msg:   msg,
-		}
-		c.tpl.ExecuteTemplate(w, "landing.gohtml", templateData)
+		return
 	}
+	// there is session
+	cookie, err := req.Cookie(cookieName) // get the cookie back
+
+	if err != nil { //no session
+		fmt.Printf("There is session, but cannot retrieve cookie %v\n", cookie)
+		msg = url.QueryEscape(err.Error())
+		http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
+		return
+	}
+	fmt.Printf("There is session, Cookie: %v\n", cookie)
+	fmt.Println()
+
+	// ********************* check valid session ****************************
+	fmt.Println("Checkking valid session......")
+	fmt.Println()
+	// retrieve the token
+	oldToken := cookie.Value
+	fmt.Printf("Cookie retrieved as:\n Name: %v\n Value: %v\n", cookie.Name, cookie.Value)
+	fmt.Println()
+
+	// JWT parseJWT token
+	sID, err := parseJWT(oldToken)
+	if err != nil { // error parsing token - hacked!
+		msg = url.QueryEscape(err.Error())
+		http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
+		fmt.Printf("Could not parse token: %v", oldToken)
+		fmt.Println()
+		return
+	}
+	fmt.Println("Token verified....")
+	// lookup uuid from sID
+	fmt.Printf("Using %v as sID\n", sID)
+	// look the sID up in session map
+	sUUID, ok := sessions[sID]
+	if !ok {
+		msg = url.QueryEscape(err.Error())
+		http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
+		fmt.Printf("Invalid session for: %v", sID)
+		fmt.Println()
+		return
+	}
+
+	fmt.Println("UUID verified as : ", sUUID)
+	fmt.Println("Valid session in root page.")
+	msg = ""
+	email = sID
+	//******************************* end check valid session ***************************************
+
+	// populate the template struct with values
+	templateData := struct {
+		Email string
+		Msg   string
+	}{
+		Email: myUser.email,
+		Msg:   msg,
+	}
+	c.tpl.ExecuteTemplate(w, "landing.gohtml", templateData)
+
 }
 
 // handle the process POST route - /process - registered
@@ -292,14 +365,37 @@ func (c Controller) processForm(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	// check if email exist
-	if myUser.email == email {
-		msg = url.QueryEscape("You have not supplied a valid email/password ")
+	// if myUser.email == email {
+	// 	msg = url.QueryEscape("You have not supplied a valid email/password ")
+	// 	http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
+	// 	return
+	// }
+	// store email in myUser
+	myUser.email = email
+	// store name, age and terms in myUser
+	myUser.name = req.FormValue("name")
+	ageT, err := strconv.Atoi(req.FormValue("age"))
+	if err != nil {
+		msg = url.QueryEscape("You have not supplied a valid age ")
 		http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
 		return
 	}
-	// store email in myUser
-	myUser.email = email
+	myUser.age = ageT
 
+	// check if user has not accepted the terms
+	if len(req.Form["terms"]) < 1 {
+		msg = url.QueryEscape("You have not accepted the terms and conditions!")
+		http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
+		return
+	}
+	terms := req.Form["terms"][0]
+	fmt.Println("terms: ", terms)
+	myUser.terms = true
+	// if terms != "on" {
+	// 	msg = url.QueryEscape("You have not accepted the terms and conditions!")
+	// 	http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
+	// 	return
+	// }
 	// note that you need to be as vague as possible with the messages here
 	password := req.FormValue("password")
 	if password == "" {
@@ -318,7 +414,9 @@ func (c Controller) processForm(w http.ResponseWriter, req *http.Request) {
 	myUser.password = passW
 	// store unencrypted password
 	myUser.passW = password
-	http.Redirect(w, req, "/", http.StatusSeeOther)
+	fmt.Println("Leaving register page - returning to root")
+	msg := url.QueryEscape("You are registered.")
+	http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
 }
 
 // handle the login POST route - /login
@@ -357,42 +455,6 @@ func (c Controller) login(w http.ResponseWriter, req *http.Request) {
 		sessions[myUser.email] = uuid.Nil
 		return
 	}
-	// // create a session
-	// sessionID, err = uuid.NewV4()
-	// if err != nil {
-	// 	msg = url.QueryEscape("Internal server error occured.")
-	// 	http.Error(w, msg, http.StatusInternalServerError) //will display on separate page with only the error
-	// 	return
-	// }
-	// sessions[email] = sessionID
-
-	// // get cookie back
-	// cookie, err := req.Cookie(cookieName)
-	// if err == nil { // cookie exists for this session
-	// 	cookie = &http.Cookie{} // clear the cookie
-	// }
-	// // re-create the cookie for session
-	// // create the token
-	// // JWT token
-	// token, err := createJWT(myUser.email)
-	// if err != nil {
-	// 	log.Printf("Error while verifying JWT token: %v\n", err)
-	// 	msg = url.QueryEscape("Internal server error occured.")
-	// 	http.Error(w, msg, http.StatusInternalServerError) //will display on separate page with only the error
-	// 	return
-	// }
-	// // populate cookie
-	// cookie = &http.Cookie{
-	// 	Name:  cookieName,
-	// 	Value: token, //token
-	// }
-	// // set the cookie
-	// http.SetCookie(w, cookie)
-	// fmt.Printf("Password verified for: %v\n", myUser.email)
-	// fmt.Printf("Cookie set as: Name: %v Value: %v\n", cookie.Name, cookie.Value)
-	// fmt.Println()
-	// fmt.Println("email: ", sessions[myUser.email])
-	// fmt.Println()
 
 	// log into account with userID and JWT
 	err = createSession(w, myUser.email)
@@ -446,11 +508,10 @@ func (c Controller) logout(w http.ResponseWriter, req *http.Request) {
 
 	// display the login screen
 	http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
-	return
 }
 
-// **************************************** github complete *********************************************
-// handle the completeGithubOauth page GET route - /
+// **************************************** github receive *********************************************
+// handle the completeGithubOauth page GET route - /oauth2/github/receive
 func (c Controller) completeGithubOauth(w http.ResponseWriter, req *http.Request) {
 	code := req.FormValue("code")
 	if code == "" {
@@ -526,28 +587,27 @@ func (c Controller) completeGithubOauth(w http.ResponseWriter, req *http.Request
 
 	// get github id
 	githubID := gr.Data.Viewer.ID
-	// store in db
-	_, ok := oauthConnections[githubID]
+	// make a signed userID by signing the returned userid
+	sToken, err = createJWT(githubID)
+	if err != nil {
+		msg = url.QueryEscape("Internal server error occured.")
+		http.Error(w, msg, http.StatusInternalServerError) // will display on separate page with only the error
+		return
+	}
+	// get Github id & store in db
+
+	// check if there is a connection for this userID
+	_, ok := oauthConnections[sToken]
 	if !ok {
 		// new user create account
-		// create a registered user
-		myUser.email = "test@gmail.com"
-		myUser.password = []byte("1234")
-		// encrypt password
-		passW, err := bcrypt.GenerateFromPassword([]byte(myUser.password), bcrypt.DefaultCost)
-		if err != nil {
-			msg = url.QueryEscape("Internal server error occured.")
-			http.Error(w, msg, http.StatusInternalServerError) // will display on separate page with only the error
-			return
-		}
-		myUser.password = passW
+		// create a registered user from oauth2 authentication
+		// ******************************************** create a registered user ******************************************
+		http.Redirect(w, req, "/partial-register", http.StatusSeeOther)
+		// ****************************************************************************************************************
 
-		// store connection with
-		log.Printf("storing user: %v\n in oauthSession with Github ID: %s\n", myUser, githubID)
-		oauthConnections[githubID] = myUser.email
 	}
 	// log into account with userID and JWT
-	fmt.Println("loggin in userID: ", githubID)
+	fmt.Println("loggin in userID: ", sToken)
 	fmt.Println()
 	err = createSession(w, myUser.email)
 	if err != nil {
@@ -557,22 +617,16 @@ func (c Controller) completeGithubOauth(w http.ResponseWriter, req *http.Request
 	fmt.Println("****************************** - User logged in with Github oauth2 - **************************")
 	fmt.Println()
 	// ****************************************************************************************************************
-	cookie, err := req.Cookie(cookieName) // get the cookie back
-	if err != nil {                       //no session
-		fmt.Printf("There is session, but cannot retrieve cookie %v\n", cookie)
-		msg = url.QueryEscape(err.Error())
-		http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
-		return
-	}
-	fmt.Printf("Cookie set after Github oauth2 as: Name: %v\n Value: %v\n", cookie.Name, cookie.Value)
+
 	// ****************************************************************************************************************
-	fmt.Println()
+
 	// display the login screen
 	http.Redirect(w, req, "/", http.StatusSeeOther)
-	return
 }
 
-// ************************************** amazon complete ************************************************
+// **************************************** github complete *********************************************
+
+// ************************************** amazon receive ************************************************
 // handle the completeGithubOauth page GET route - /oauth2/amazon/receive
 func (c Controller) completeAmazonOauth(w http.ResponseWriter, req *http.Request) {
 	code := req.FormValue("code")
@@ -661,31 +715,24 @@ func (c Controller) completeAmazonOauth(w http.ResponseWriter, req *http.Request
 		return
 	}
 	log.Printf("User from amazon: %v\n", gr)
-
+	// get Amazon id
+	amazonID := gr.UserID
+	// make a signed userID by signing the returned userid
+	sToken, err = createJWT(amazonID)
+	if err != nil {
+		msg = url.QueryEscape("Internal server error occured.")
+		http.Error(w, msg, http.StatusInternalServerError) // will display on separate page with only the error
+		return
+	}
 	// get amazon id & store in db
-	_, ok := oauthConnections[gr.UserID]
+	_, ok := oauthConnections[sToken]
 	if !ok { // user does not exist
-		log.Printf("Creating new Amazon user in connections, User id: %v...\n", gr.UserID)
+		// log.Printf("Creating new Amazon user in connections, User id: %v...\n", gr.UserID)
+		http.Redirect(w, req, "/partial-register", http.StatusSeeOther)
 
-		// new user: create account
-		// create a registered user
-		myUser.email = "test@gmail.com"
-		myUser.password = []byte("1234")
-		// encrypt password
-		passW, err := bcrypt.GenerateFromPassword([]byte(myUser.password), bcrypt.DefaultCost)
-		if err != nil {
-			msg = url.QueryEscape("Internal server error occured.")
-			http.Error(w, msg, http.StatusInternalServerError) // will display on separate page with only the error
-			return
-		}
-		myUser.password = passW
-
-		// store connection with
-		log.Printf("storing user: %v\n in oauthSession with amazon ID: %s\n", myUser, gr.UserID)
-		oauthConnections[gr.UserID] = myUser.email
 	}
 	// log into account with userID and JWT
-	fmt.Println("loggin in userID: ", gr.UserID)
+	fmt.Println("loggin in userID: ", sToken)
 	fmt.Println()
 	err = createSession(w, myUser.email)
 	if err != nil {
@@ -694,25 +741,24 @@ func (c Controller) completeAmazonOauth(w http.ResponseWriter, req *http.Request
 	}
 	fmt.Println("****************************** - User logged in with Amazon oauth2 - **************************")
 	fmt.Println()
+
+	// save the Amazon email in email
+	email = gr.Email
+	// save the Amazon name
+	name = gr.Name
 	// ****************************************************************************************************************
-	cookie, err := req.Cookie(cookieName) // get the cookie back
-	if err != nil {                       //no session
-		fmt.Printf("There is session, but cannot retrieve cookie %v\n", cookie)
-		msg = url.QueryEscape(err.Error())
-		http.Redirect(w, req, "/?msg= "+msg, http.StatusSeeOther)
-		return
-	}
-	fmt.Printf("Cookie set after Amazon oauth2 as: Name: %v\n Value: %v\n", cookie.Name, cookie.Value)
+
 	// ****************************************************************************************************************
-	fmt.Println()
 	// display the login screen
 	http.Redirect(w, req, "/", http.StatusSeeOther)
 	return
 }
 
+// ************************************** amazon complete ************************************************
+
 // createSession creates an user session
 func createSession(w http.ResponseWriter, email string) error {
-	// create a session
+	// create a session with new uuid
 	sessionID, err := uuid.NewV4()
 	if err != nil {
 		return fmt.Errorf("could not create seesion id: %w", err)
@@ -721,8 +767,7 @@ func createSession(w http.ResponseWriter, email string) error {
 	sessions[email] = sessionID
 
 	// re-create the cookie for session
-	// create the token
-	// JWT token
+	// create the JWT token
 	token, err := createJWT(email)
 	if err != nil {
 		log.Printf("Error while verifying JWT token: %v\n", err)
