@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"io/ioutil"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/gofrs/uuid"
 	"github.com/pienaahj/authentication/conf"
+	"github.com/spf13/viper"
 
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/oauth2"
@@ -43,10 +45,16 @@ type userDB struct {
 	passW      string // unencrpted user password
 }
 
-// config for gitbub oauth2
+// env vars
+var githubConnectionStringUserID string
+var githubConnectionStringUserPASW string
+var amazonConnectionStringUserID string
+var amazonConnectionStringUserPASW string
+
+// config for gitbub oauth2	var githubConnectionStringUserPASW string
 var githubOauthConfig = &oauth2.Config{
-	ClientID:     "538ea563d528f457bd46",
-	ClientSecret: "5d600c8c314322e4fadb141e8ce270bd348478c6",
+	ClientID:     githubConnectionStringUserID,
+	ClientSecret: githubConnectionStringUserPASW,
 	Endpoint:     github.Endpoint,
 }
 
@@ -75,8 +83,8 @@ var oauthConnections = map[string]string{}
 
 // config for gitbub oauth2
 var amazonOauthConfig = &oauth2.Config{
-	ClientID:     "amzn1.application-oa2-client.479f18b080cc4a20a8b9206834a7a596",
-	ClientSecret: "bfdca5433cd5213bb306efc835032b277e410e9b4f0440b31b6063482d860d9c",
+	ClientID:     amazonConnectionStringUserID,
+	ClientSecret: amazonConnectionStringUserPASW,
 	Endpoint:     amazon.Endpoint,
 	RedirectURL:  "http://localhost:8080/oauth2/amazon/receive", // this is where amazon needs to return your token
 	// note most servers will only allow http requests to localhost all others needs https
@@ -99,12 +107,55 @@ var (
 	oauth2State = map[string]time.Time{}
 )
 
+// Get environment
+func getEnv() error {
+	viper.AutomaticEnv()
+	//  github
+	if githubConnectionStringUserIDT, ok := viper.Get("CLIENTID").(string); !ok {
+		log.Println("Cannot get env variable for github")
+		return errors.New("github env error")
+	} else {
+		githubConnectionStringUserID = githubConnectionStringUserIDT
+		// fmt.Printf("viper : %s = %s \n", "Connection string", githubConnectionStringUserID)
+	}
+	if githubConnectionStringUserPASWT, ok := viper.Get("CLIENTSECRET").(string); !ok {
+		log.Println("Cannot get env variable for github")
+		return errors.New("github env error")
+	} else {
+		githubConnectionStringUserPASW = githubConnectionStringUserPASWT
+		// fmt.Printf("viper : %s = %s \n", "Connection string", githubConnectionStringUserPASW)
+	}
+	// amazon
+	if amazonConnectionStringUserIDT, ok := viper.Get("AZCLIENTID").(string); !ok {
+		log.Println("Cannot get env variable for amazon")
+		return errors.New("amazon env error")
+	} else {
+		amazonConnectionStringUserID = amazonConnectionStringUserIDT
+		// fmt.Printf("viper : %s = %s \n", "Connection string", amazonConnectionStringUserID)
+	}
+	if amazonConnectionStringUserPASWT, ok := viper.Get("AZCLIENTSECRET").(string); !ok {
+		log.Println("Cannot get env variable for amazon")
+		return errors.New("amazon env error")
+	} else {
+		amazonConnectionStringUserPASW = amazonConnectionStringUserPASWT
+		// fmt.Printf("viper : %s = %s \n", "Connection string", amazonConnectionStringUserPASW)
+	}
+	return nil
+}
+
+
 // NewController provides new controller for template processing
 func NewController(t *template.Template) *Controller {
 	return &Controller{t}
 }
 
 func main() {
+	// Get envs
+	err := getEnv()
+	if err != nil {
+		log.Fatal("Could not load environment")
+	}
+
 	// Get a template controller value.
 	c := NewController(conf.TPL)
 
@@ -311,7 +362,7 @@ func (c Controller) register(w http.ResponseWriter, req *http.Request) {
 	fmt.Printf("Cookie retrieved as:\n Name: %v\n Value: %v\n", cookie.Name, cookie.Value)
 	fmt.Println()
 
-	// JWT parseJWT token
+	// parseJWT parses the JWT token
 	sID, err := parseJWT(oldToken)
 	if err != nil { // error parsing token - hacked!
 		msg = url.QueryEscape(err.Error())

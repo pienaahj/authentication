@@ -31,7 +31,7 @@ func createJWT(sID string) (string, error) {
 	// sign the token with your key
 	ss, err := token.SignedString([]byte(mySigningKey)) // hmac requires a []byte type as key
 	if err != nil {
-		return "", fmt.Errorf("Could not sign token in SignedString: %w", err)
+		return "", fmt.Errorf("could not sign token in SignedString: %w", err)
 	}
 	return ss, nil
 }
